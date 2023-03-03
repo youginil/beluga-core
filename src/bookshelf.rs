@@ -1,19 +1,10 @@
-use crate::{
-    error::{LaputaError, LaputaResult},
-    laputa::Laputa,
-};
+use crate::{dictionary::Dictionary, error::LaputaResult};
 
 pub type ID = u32;
 
-struct Dictionary {
-    id: ID,
-    path: String,
-    laputa: Laputa,
-}
-
 pub struct Bookshelf {
     id: ID,
-    dictionaries: Vec<Dictionary>,
+    dictionaries: Vec<(ID, Dictionary)>,
 }
 
 impl Bookshelf {
@@ -24,17 +15,11 @@ impl Bookshelf {
         }
     }
 
-    pub fn add(&mut self, path: &String) -> LaputaResult<ID> {
-        let laputa = match Laputa::from_file(path.as_str()) {
-            Ok(l) => l,
-            Err(e) => return Err(e),
-        };
-        self.id = self.id + 1;
-        self.dictionaries.push(Dictionary {
-            id: self.id,
-            path: path.clone(),
-            laputa,
-        });
+    pub fn add(&mut self, path: &str) -> LaputaResult<ID> {
+        let id = self.id + 1;
+        let dict = Dictionary::new(path)?;
+        self.dictionaries.push((id, dict));
+        self.id = id;
         Ok(self.id)
     }
 
@@ -42,7 +27,7 @@ impl Bookshelf {
         let mut index: usize = 0;
         let mut exists = false;
         for (i, item) in self.dictionaries.iter().enumerate() {
-            if id == item.id {
+            if id == item.0 {
                 index = i;
                 exists = true;
             }
@@ -56,7 +41,7 @@ impl Bookshelf {
         self.dictionaries.clear();
     }
 
-    pub fn search(&self, id: ID, word: &str) -> LaputaResult<String> {
-        Err(LaputaError::NotFound)
+    pub fn search(&self, id: ID, word: &str) -> Vec<String> {
+        todo!()
     }
 }

@@ -1,3 +1,11 @@
+use std::{
+    fs::File,
+    io::{Read, Seek, SeekFrom},
+    string::FromUtf8Error,
+};
+
+use crate::error::{LaputaError, LaputaResult};
+
 pub fn u8v_to_u64(v: &[u8]) -> u64 {
     if v.len() != 8 {
         panic!("Invalid vector size");
@@ -77,4 +85,75 @@ pub fn u8v_to_u16v(v: &[u8], endian: Endianness) -> Vec<u16> {
         }
     }
     r
+}
+
+struct Scanner {
+    buf: Vec<u8>,
+    pos: usize,
+}
+
+impl Scanner {
+    fn new(buf: Vec<u8>) -> Self {
+        Self { buf, pos: 0 }
+    }
+
+    fn seek(&mut self, pos: usize) {
+        self.pos = pos;
+    }
+
+    fn forward(&self, n: usize) {
+        self.pos += n;
+    }
+
+    fn read_u64(&mut self) -> u64 {
+        let r = u8v_to_u64(&self.buf[self.pos..self.pos + 8]);
+        self.forward(8);
+        r
+    }
+
+    fn read_u32(&mut self) -> u32 {
+        let r = u8v_to_u32(&self.buf[self.pos..self.pos + 4]);
+        self.forward(4);
+        r
+    }
+
+    fn read_string(&mut self, n: usize) -> Result<String, FromUtf8Error> {
+        let s = String::from_utf8(self.buf[self.pos..self.pos + n].to_vec());
+        self.pos += n;
+        s
+    }
+}
+
+pub fn file_read(file: &mut File, n: usize) -> LaputaResult<Vec<u8>> {
+    let mut buf: Vec<u8> = Vec::with_capacity(n);
+    if let Ok(size) = file.read(&mut buf) {
+        if size != buf.len() {
+            return Err(LaputaError::InvalidDictionary);
+        }
+    } else {
+        return Err(LaputaError::InvalidDictionary);
+    }
+    Ok(buf)
+}
+
+pub fn file_seek(file: &mut File, pos: SeekFrom) -> LaputaResult<()> {
+    if let Err(_) = file.seek(pos) {
+        return Err(LaputaError::InvalidDictionary);
+    }
+    Ok(())
+}
+
+pub fn file_metadata(file: &File) -> LaputaResult<std::fs::Metadata> {
+    if let Ok(m) = file.metadata() {
+        return Ok(m);
+    } else {
+        return Err(LaputaError::InvalidDictionary);
+    }
+}
+
+pub fn file_open(filepath: &str) -> LaputaResult<File> {
+    match File::open(filepath) {
+        Ok(r) => Ok(r),
+        Err(_) => return Err(LaputaError::InvalidDictionary),
+    }
 }

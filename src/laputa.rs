@@ -5,7 +5,7 @@ use flate2::{read::DeflateDecoder, write::DeflateEncoder, Compression};
 use serde::{Deserialize, Serialize};
 use std::cell::RefCell;
 use std::fs::File;
-use std::io::{prelude::*, ErrorKind, SeekFrom};
+use std::io::{prelude::*, SeekFrom};
 use std::path::Path;
 use std::rc::Rc;
 
@@ -14,7 +14,7 @@ const INDEX_NODE_SIZE: usize = 32 * 1024;
 const EXT_WORD: &str = "lpw";
 const EXT_RESOURCE: &str = "lpr";
 
-fn parse_file_type(file: &str) -> LaputaResult<LapFileType> {
+pub fn parse_file_type(file: &str) -> LaputaResult<LapFileType> {
     let ext = file.split(".").last();
     match ext {
         Some(EXT_WORD) => Ok(LapFileType::Word),
@@ -354,18 +354,13 @@ impl Laputa {
     }
 
     pub fn from_file(filepath: &str) -> LaputaResult<Self> {
-        let ext = match Laputa::parse_file_type(filepath) {
+        let ext = match parse_file_type(filepath) {
             Ok(r) => r,
             Err(e) => return Err(e),
         };
         let mut file = match File::open(filepath) {
             Ok(r) => r,
-            Err(e) => {
-                return match e.kind() {
-                    ErrorKind::NotFound => Err(LaputaError::NotFound),
-                    _ => Err(LaputaError::InvalidDictionary),
-                };
-            }
+            Err(_) => return Err(LaputaError::InvalidDictionary),
         };
         let mut buf: Vec<u8> = vec![0; 4];
         if let Ok(size) = file.read(&mut buf) {
@@ -406,7 +401,7 @@ impl Laputa {
         let root_offset = u8v_to_u64(&buf[..]) as usize;
         let file_size = match file.metadata() {
             Ok(m) => m.len() as usize,
-            Err(e) => return Err(LaputaError::InvalidDictionary),
+            Err(_) => return Err(LaputaError::InvalidDictionary),
         };
         if let Err(_) = file.seek(SeekFrom::Start(0)) {
             return Err(LaputaError::InvalidDictionary);
@@ -655,9 +650,5 @@ impl Laputa {
             }
         }
         raw.flush(is_text);
-    }
-
-    pub fn search(&self, name: &str) -> Option<Vec<u8>> {
-        None
     }
 }

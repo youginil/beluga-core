@@ -1,5 +1,4 @@
 pub enum LaputaError {
-    NotFound,
     InvalidDictionary,
     InvalidName
 }

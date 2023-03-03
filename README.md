@@ -70,3 +70,4 @@ select * from word group by name having count(*) > 1;
 - HTML validation, fix, prettify. `tidy-html5`, `cheerio`
 - Convert resource id to `<a href="audio://a/b/c.mp3">`, `<img data-src="a/b/c.jpg">`
 - Capture. `puppeteer`
+- Fulltext search for words. phrase, idoms
