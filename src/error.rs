@@ -1,6 +1,8 @@
 pub enum LaputaError {
-    InvalidDictionary,
-    InvalidName
+    InvalidDictName,
+    InvalidDictFile,
+    InvalidJS,
+    InvalidCSS
 }
 
 pub type LaputaResult<T> = std::result::Result<T, LaputaError>;

@@ -11,15 +11,15 @@ use std::rc::Rc;
 
 const LEAF_NODE_SIZE: usize = 32 * 1024;
 const INDEX_NODE_SIZE: usize = 32 * 1024;
-const EXT_WORD: &str = "lpw";
-const EXT_RESOURCE: &str = "lpr";
+pub const EXT_WORD: &str = "lpw";
+pub const EXT_RESOURCE: &str = "lpr";
 
 pub fn parse_file_type(file: &str) -> LaputaResult<LapFileType> {
     let ext = file.split(".").last();
     match ext {
         Some(EXT_WORD) => Ok(LapFileType::Word),
         Some(EXT_RESOURCE) => Ok(LapFileType::Resource),
-        _ => Err(LaputaError::InvalidName),
+        _ => Err(LaputaError::InvalidDictName),
     }
 }
 
@@ -360,59 +360,59 @@ impl Laputa {
         };
         let mut file = match File::open(filepath) {
             Ok(r) => r,
-            Err(_) => return Err(LaputaError::InvalidDictionary),
+            Err(_) => return Err(LaputaError::InvalidDictFile),
         };
         let mut buf: Vec<u8> = vec![0; 4];
         if let Ok(size) = file.read(&mut buf) {
             if size != buf.len() {
-                return Err(LaputaError::InvalidDictionary);
+                return Err(LaputaError::InvalidDictFile);
             }
         } else {
-            return Err(LaputaError::InvalidDictionary);
+            return Err(LaputaError::InvalidDictFile);
         }
         let metadata_length = u8v_to_u32(&buf[..]);
         buf = vec![0; metadata_length as usize];
         if let Ok(size) = file.read(&mut buf) {
             if size != buf.len() {
-                return Err(LaputaError::InvalidDictionary);
+                return Err(LaputaError::InvalidDictFile);
             }
         } else {
-            return Err(LaputaError::InvalidDictionary);
+            return Err(LaputaError::InvalidDictFile);
         }
         let metadata = match serde_json::from_slice(&buf[..]) {
             Ok(r) => r,
             Err(_) => {
-                return Err(LaputaError::InvalidDictionary);
+                return Err(LaputaError::InvalidDictFile);
             }
         };
         let mut po = Self::new(metadata, ext);
         // root node
         if let Err(_) = file.seek(SeekFrom::End(-8)) {
-            return Err(LaputaError::InvalidDictionary);
+            return Err(LaputaError::InvalidDictFile);
         }
         buf = vec![0; 8];
         if let Ok(size) = file.read(&mut buf) {
             if size != buf.len() {
-                return Err(LaputaError::InvalidDictionary);
+                return Err(LaputaError::InvalidDictFile);
             }
         } else {
-            return Err(LaputaError::InvalidDictionary);
+            return Err(LaputaError::InvalidDictFile);
         }
         let root_offset = u8v_to_u64(&buf[..]) as usize;
         let file_size = match file.metadata() {
             Ok(m) => m.len() as usize,
-            Err(_) => return Err(LaputaError::InvalidDictionary),
+            Err(_) => return Err(LaputaError::InvalidDictFile),
         };
         if let Err(_) = file.seek(SeekFrom::Start(0)) {
-            return Err(LaputaError::InvalidDictionary);
+            return Err(LaputaError::InvalidDictFile);
         }
         buf = vec![0; file_size];
         if let Ok(size) = file.read(&mut buf) {
             if size != buf.len() {
-                return Err(LaputaError::InvalidDictionary);
+                return Err(LaputaError::InvalidDictFile);
             }
         } else {
-            return Err(LaputaError::InvalidDictionary);
+            return Err(LaputaError::InvalidDictFile);
         }
         let leaves = Rc::clone(&po.leaves);
         po.root =

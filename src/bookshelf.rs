@@ -42,6 +42,11 @@ impl Bookshelf {
     }
 
     pub fn search(&self, id: ID, word: &str) -> Vec<String> {
-        todo!()
+        for d in &self.dictionaries {
+            if d.0 == id {
+                return d.1.search(word);
+            }
+        }
+        vec![]
     }
 }

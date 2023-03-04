@@ -101,7 +101,7 @@ impl Scanner {
         self.pos = pos;
     }
 
-    fn forward(&self, n: usize) {
+    fn forward(&mut self, n: usize) {
         self.pos += n;
     }
 
@@ -128,17 +128,17 @@ pub fn file_read(file: &mut File, n: usize) -> LaputaResult<Vec<u8>> {
     let mut buf: Vec<u8> = Vec::with_capacity(n);
     if let Ok(size) = file.read(&mut buf) {
         if size != buf.len() {
-            return Err(LaputaError::InvalidDictionary);
+            return Err(LaputaError::InvalidDictFile);
         }
     } else {
-        return Err(LaputaError::InvalidDictionary);
+        return Err(LaputaError::InvalidDictFile);
     }
     Ok(buf)
 }
 
 pub fn file_seek(file: &mut File, pos: SeekFrom) -> LaputaResult<()> {
     if let Err(_) = file.seek(pos) {
-        return Err(LaputaError::InvalidDictionary);
+        return Err(LaputaError::InvalidDictFile);
     }
     Ok(())
 }
@@ -147,13 +147,13 @@ pub fn file_metadata(file: &File) -> LaputaResult<std::fs::Metadata> {
     if let Ok(m) = file.metadata() {
         return Ok(m);
     } else {
-        return Err(LaputaError::InvalidDictionary);
+        return Err(LaputaError::InvalidDictFile);
     }
 }
 
 pub fn file_open(filepath: &str) -> LaputaResult<File> {
     match File::open(filepath) {
         Ok(r) => Ok(r),
-        Err(_) => return Err(LaputaError::InvalidDictionary),
+        Err(_) => return Err(LaputaError::InvalidDictFile),
     }
 }
