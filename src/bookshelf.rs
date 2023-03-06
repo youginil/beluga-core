@@ -1,10 +1,8 @@
 use crate::{dictionary::Dictionary, error::LaputaResult};
 
-pub type ID = u32;
-
 pub struct Bookshelf {
-    id: ID,
-    dictionaries: Vec<(ID, Dictionary)>,
+    id: u32,
+    dictionaries: Vec<(u32, Dictionary)>,
 }
 
 impl Bookshelf {
@@ -15,7 +13,7 @@ impl Bookshelf {
         }
     }
 
-    pub fn add(&mut self, path: &str) -> LaputaResult<ID> {
+    pub fn add(&mut self, path: &str) -> LaputaResult<u32> {
         let id = self.id + 1;
         let dict = Dictionary::new(path)?;
         self.dictionaries.push((id, dict));
@@ -23,7 +21,7 @@ impl Bookshelf {
         Ok(self.id)
     }
 
-    pub fn remove(&mut self, id: ID) {
+    pub fn remove(&mut self, id: u32) {
         let mut index: usize = 0;
         let mut exists = false;
         for (i, item) in self.dictionaries.iter().enumerate() {
@@ -41,7 +39,7 @@ impl Bookshelf {
         self.dictionaries.clear();
     }
 
-    pub fn search(&self, id: ID, word: &str) -> Vec<String> {
+    pub fn search(&self, id: u32, word: &str) -> Vec<String> {
         for d in &self.dictionaries {
             if d.0 == id {
                 return d.1.search(word);

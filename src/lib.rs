@@ -1,4 +1,5 @@
 mod utils;
+mod lru;
 mod dictionary;
 pub mod laputa;
 pub mod raw;

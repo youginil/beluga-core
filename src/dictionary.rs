@@ -11,10 +11,10 @@ use std::{
 
 struct DictWord {
     name: String,
-    value: Vec<u8>,
+    value: Option<Vec<u8>>,
 }
 
-struct DictNode {
+pub struct DictNode {
     words: Vec<DictWord>,
     children: Vec<(u64, u32)>,
     size: u64,

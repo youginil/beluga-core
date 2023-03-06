@@ -71,3 +71,4 @@ select * from word group by name having count(*) > 1;
 - Convert resource id to `<a href="audio://a/b/c.mp3">`, `<img data-src="a/b/c.jpg">`
 - Capture. `puppeteer`
 - Fulltext search for words. phrase, idoms
+- `https://crates.io/crates/anyhow`, `https://crates.io/crates/thiserror`
