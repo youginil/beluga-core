@@ -4,7 +4,6 @@ use rusqlite::{params, Connection};
 const TABLE_NAME: &str = "word";
 
 struct Word {
-    id: u64,
     name: String,
     text: Option<String>,
     binary: Option<Vec<u8>>,
@@ -70,14 +69,12 @@ impl RawDict {
     pub fn insert(&mut self, name: &str, value: &[u8], is_text: bool) {
         if is_text {
             self.cache.push(Word {
-                id: 0,
                 name: String::from(name),
                 text: Some(String::from_utf8(value.to_vec()).unwrap()),
                 binary: None,
             });
         } else {
             self.cache.push(Word {
-                id: 0,
                 name: String::from(name),
                 text: None,
                 binary: Some(value.to_vec()),
@@ -102,7 +99,6 @@ impl RawDict {
             let mut rows: Vec<Word> = Vec::new();
             while let Ok(Some(row)) = list.next() {
                 rows.push(Word {
-                    id: row.get(0).unwrap(),
                     name: row.get(1).unwrap(),
                     text: row.get(2).unwrap(),
                     binary: row.get(3).unwrap(),

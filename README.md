@@ -72,3 +72,4 @@ select * from word group by name having count(*) > 1;
 - Capture. `puppeteer`
 - Fulltext search for words. phrase, idoms
 - `https://crates.io/crates/anyhow`, `https://crates.io/crates/thiserror`
+- Performance monitor

@@ -1,24 +1,34 @@
-use crate::{dictionary::Dictionary, error::LaputaResult};
+use std::{cell::RefCell, rc::Rc};
+
+use crate::{
+    dictionary::{Dictionary, LruCacheRef},
+    error::LaputaResult,
+    lru::LruCache, laputa::Metadata,
+};
 
 pub struct Bookshelf {
-    id: u32,
+    dict_id: u32,
     dictionaries: Vec<(u32, Dictionary)>,
+    cache_id: u32,
+    cache: LruCacheRef,
 }
 
 impl Bookshelf {
-    pub fn new() -> Self {
+    pub fn new(cap: u64) -> Self {
         Self {
-            id: 0,
+            dict_id: 0,
             dictionaries: Vec::new(),
+            cache_id: 0,
+            cache: Rc::new(RefCell::new(LruCache::new(cap))),
         }
     }
 
     pub fn add(&mut self, path: &str) -> LaputaResult<u32> {
-        let id = self.id + 1;
-        let dict = Dictionary::new(path)?;
-        self.dictionaries.push((id, dict));
-        self.id = id;
-        Ok(self.id)
+        let (dict, cache_id) = Dictionary::new(path, &self.cache, self.cache_id)?;
+        self.cache_id = cache_id + 1;
+        self.dictionaries.push((self.dict_id, dict));
+        self.dict_id += 1;
+        Ok(self.dict_id)
     }
 
     pub fn remove(&mut self, id: u32) {
@@ -39,12 +49,61 @@ impl Bookshelf {
         self.dictionaries.clear();
     }
 
-    pub fn search(&self, id: u32, word: &str) -> Vec<String> {
+    pub fn metadata(&self, id: u32) -> Option<Metadata> {
         for d in &self.dictionaries {
             if d.0 == id {
-                return d.1.search(word);
+                return Some(d.1.metadata());
+            }
+        }
+        None
+    }
+
+    pub fn search(&mut self, id: u32, word: &str, limit: usize) -> Vec<String> {
+        for (_, d) in self.dictionaries.iter_mut().enumerate() {
+            if d.0 == id {
+                return d.1.search(word, limit);
             }
         }
         vec![]
+    }
+
+    pub fn search_word(&mut self, id: u32, name: &str) -> Option<String> {
+        for (_, d) in self.dictionaries.iter_mut().enumerate() {
+            if d.0 == id {
+                return d.1.search_word(name);
+            }
+        }
+        None
+    }
+
+    pub fn search_resource(&mut self, id: u32, name: &str) -> Option<Vec<u8>> {
+        for (_, d) in self.dictionaries.iter_mut().enumerate() {
+            if d.0 == id {
+                return d.1.search_resource(name);
+            }
+        }
+        None
+    }
+
+    pub fn get_js(&self, id: u32) -> String {
+        for (i, d) in &self.dictionaries {
+            if *i == id {
+                return d.js.clone();
+            }
+        }
+        String::from("")
+    }
+
+    pub fn get_css(&self, id: u32) -> String {
+        for (i, d) in &self.dictionaries {
+            if *i == id {
+                return d.css.clone();
+            }
+        }
+        String::from("")
+    }
+
+    pub fn resize_cache(&mut self, cap: u64) {
+        self.cache.borrow_mut().resize(cap);
     }
 }

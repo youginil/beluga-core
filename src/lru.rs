@@ -1,34 +1,44 @@
 use core::hash::Hash;
 use std::{cell::RefCell, collections::HashMap, rc::Rc};
 
-trait SizedValue {
-    fn size(&self) -> usize;
+pub trait SizedValue {
+    fn size(&self) -> u64;
 }
 
 type LruNodeRef<K, V> = Rc<RefCell<LruNode<K, V>>>;
+pub type LruValue<V> = Rc<RefCell<V>>;
 
 struct LruNode<K, V> {
     key: K,
-    val: V,
-    size: usize,
+    val: LruValue<V>,
+    size: u64,
     prev: Option<LruNodeRef<K, V>>,
     next: Option<LruNodeRef<K, V>>,
 }
 
-struct LruCache<K, V: SizedValue> {
-    cap: usize,
-    len: usize,
+pub struct LruCache<K, V: SizedValue> {
+    cap: u64,
+    len: u64,
     map: HashMap<K, LruNodeRef<K, V>>,
     head: Option<LruNodeRef<K, V>>,
     tail: Option<LruNodeRef<K, V>>,
 }
 
 impl<K: Hash + Eq + Copy, V: SizedValue> LruCache<K, V> {
-    pub fn put(&mut self, key: K, val: V) {
+    pub fn new(cap: u64) -> Self {
+        Self {
+            cap,
+            len: 0,
+            map: HashMap::new(),
+            head: None,
+            tail: None,
+        }
+    }
+    pub fn put(&mut self, key: K, val: V) -> LruValue<V> {
         match self.map.get_mut(&key) {
             Some(value) => {
                 let mut v = value.borrow_mut();
-                v.val = val;
+                v.val = Rc::new(RefCell::new(val));
                 match &v.next {
                     Some(n) => {
                         if let Some(p) = &v.prev {
@@ -53,7 +63,7 @@ impl<K: Hash + Eq + Copy, V: SizedValue> LruCache<K, V> {
                 let size = val.size();
                 let v = LruNode {
                     key,
-                    val,
+                    val: Rc::new(RefCell::new(val)),
                     size,
                     prev: None,
                     next: self.head.clone(),
@@ -73,16 +83,17 @@ impl<K: Hash + Eq + Copy, V: SizedValue> LruCache<K, V> {
             }
         }
         self.shrink();
+        self.head.as_mut().unwrap().borrow().val.clone()
     }
 
-    pub fn get(&self, key: &K) -> Option<&V> {
+    pub fn get(&self, key: &K) -> Option<LruValue<V>> {
         match self.map.get(key) {
-            Some(v) => unsafe { Some(&(*v.as_ptr()).val) },
+            Some(v) => Some(v.borrow().val.clone()),
             None => None,
         }
     }
 
-    pub fn resize(&mut self, size: usize) {
+    pub fn resize(&mut self, size: u64) {
         self.cap = size;
         self.shrink();
     }
