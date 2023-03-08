@@ -21,6 +21,7 @@ struct DictWord {
 }
 
 pub struct DictNode {
+    is_leaf: bool,
     words: Vec<DictWord>,
     children: Vec<(u64, u32)>,
     size: u64,
@@ -29,6 +30,7 @@ pub struct DictNode {
 impl DictNode {
     fn new() -> Self {
         Self {
+            is_leaf: true,
             words: Vec::new(),
             children: Vec::new(),
             size: 0,
@@ -132,6 +134,7 @@ impl DictFile {
             let mut node = DictNode::new();
             node.size = data.len() as u64;
             let mut scanner = Scanner::new(data);
+            node.is_leaf = scanner.read_u8() == 0;
             let wc = scanner.read_u32();
             for _ in 0..wc {
                 let size = scanner.read_u32();
@@ -147,7 +150,7 @@ impl DictFile {
                     return None;
                 }
             }
-            let cc = scanner.read_u32();
+            let cc = if node.is_leaf { 1 } else { wc + 1 };
             for _ in 0..cc {
                 let offset = scanner.read_u64();
                 let size = scanner.read_u32();
@@ -172,7 +175,7 @@ impl DictFile {
             };
             let dn = node.borrow();
             let (wi, cr) = dn.search(name);
-            if dn.children.len() == 1 {
+            if dn.is_leaf {
                 if cr.is_ge() {
                     for i in wi..dn.words.len() {
                         let wd = &dn.words[i].name;
@@ -229,7 +232,7 @@ impl DictFile {
             };
             let dn = node.borrow();
             let (index, cr) = dn.search(name);
-            if dn.children.len() == 1 {
+            if dn.is_leaf {
                 let words = &dn.words;
                 if cr.is_ge() {
                     for i in index..words.len() {

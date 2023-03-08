@@ -76,6 +76,12 @@ impl Scanner {
         r
     }
 
+    pub fn read_u8(&mut self) -> u8 {
+        let r = self.buf[self.pos];
+        self.forward(1);
+        r
+    }
+
     pub fn read_string(&mut self, n: usize) -> Result<String, FromUtf8Error> {
         let s = String::from_utf8(self.buf[self.pos..self.pos + n].to_vec());
         self.pos += n;

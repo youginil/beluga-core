@@ -123,8 +123,8 @@ fn create_node_ref() -> NodeRef {
     return Rc::new(RefCell::new(Node::new()));
 }
 
-fn create_node_ref_with_data(words: Vec<Word>, children: Vec<NodeRef>) -> NodeRef {
-    return Rc::new(RefCell::new(Node::with_data(words, children)));
+fn create_node_ref_with_data(words: Vec<Word>, children: Vec<NodeRef>, is_leaf: bool) -> NodeRef {
+    return Rc::new(RefCell::new(Node::with_data(words, children, is_leaf)));
 }
 
 fn create_node_ref_from_bytes(
@@ -137,9 +137,10 @@ fn create_node_ref_from_bytes(
     let mut decode = DeflateDecoder::new(slice);
     let mut data: Vec<u8> = Vec::new();
     decode.read_to_end(&mut data).unwrap();
-    let wc = u8v_to_u32(&data[0..4]);
+    let is_leaf = data[0] == 0;
+    let wc = u8v_to_u32(&data[1..5]);
     let mut words: Vec<Word> = Vec::new();
-    let mut pos: usize = 4;
+    let mut pos: usize = 5;
     for _ in 0..wc {
         let word_length = u8v_to_u32(&data[pos..(pos + 4)]) as usize;
         pos += 4;
@@ -153,7 +154,7 @@ fn create_node_ref_from_bytes(
         words.push(Word::with_value(key, b));
     }
     println!("Node [{} ~ {}]", words[0].key, words[words.len() - 1].key);
-    let node_ref = create_node_ref_with_data(words, Vec::new());
+    let node_ref = create_node_ref_with_data(words, Vec::new(), is_leaf);
     let mut children: Vec<NodeRef> = Vec::new();
     let cc = u8v_to_u32(&data[pos..(pos + 4)]);
     pos += 4;
@@ -179,6 +180,7 @@ struct Node {
     words: Vec<Word>,
     children: Vec<NodeRef>,
     parent: Option<NodeRef>,
+    is_leaf: bool,
     offset: u64,
     compressed_size: u32,
 }
@@ -189,16 +191,18 @@ impl Node {
             words: Vec::new(),
             children: Vec::new(),
             parent: None,
+            is_leaf: true,
             offset: 0,
             compressed_size: 0,
         }
     }
 
-    fn with_data(words: Vec<Word>, children: Vec<NodeRef>) -> Self {
+    fn with_data(words: Vec<Word>, children: Vec<NodeRef>, is_leaf: bool) -> Self {
         Self {
             words,
             children,
             parent: None,
+            is_leaf,
             offset: 0,
             compressed_size: 0,
         }
@@ -215,10 +219,6 @@ impl Node {
             size += 12 * self.children.len();
         }
         return size;
-    }
-
-    fn is_leaf(&self) -> bool {
-        self.children.len() == 0
     }
 
     fn index_of(&self, word: &Word) -> (usize, i8) {
@@ -287,26 +287,24 @@ impl Node {
         if self.words.len() + 1 > 2u64.pow(32) as usize {
             panic!("Node has too many words");
         }
+        if self.is_leaf {
+            buf.append(&mut vec![0]);
+        } else {
+            buf.append(&mut vec![1]);
+        }
         let mut wc = u32_to_u8v(self.words.len() as u32);
         buf.append(&mut wc);
         for i in 0..self.words.len() {
             let mut word_buf = self.words[i].to_vec();
             buf.append(&mut word_buf);
         }
-        if self.children.len() == 0 {
-            let mut cc_buf = u32_to_u8v(1);
-            buf.append(&mut cc_buf);
-        } else {
-            let mut cc_buf = u32_to_u8v(self.children.len() as u32);
-            buf.append(&mut cc_buf);
-            for i in 0..self.children.len() {
-                let child = self.children[i].borrow();
-                let child_offset = child.offset;
-                let mut co_buf = u64_to_u8v(child_offset);
-                buf.append(&mut co_buf);
-                let mut child_size_buf = u32_to_u8v(child.compressed_size);
-                buf.append(&mut child_size_buf);
-            }
+        for i in 0..self.children.len() {
+            let child = self.children[i].borrow();
+            let child_offset = child.offset;
+            let mut co_buf = u64_to_u8v(child_offset);
+            buf.append(&mut co_buf);
+            let mut child_size_buf = u32_to_u8v(child.compressed_size);
+            buf.append(&mut child_size_buf);
         }
         return buf;
     }
@@ -433,7 +431,7 @@ impl Laputa {
         loop {
             let tmp_node_ref = node_ref.clone();
             let node = tmp_node_ref.borrow();
-            if node.is_leaf() {
+            if node.is_leaf {
                 break;
             } else {
                 let (idx, cmp) = node.index_of(&word);
@@ -457,7 +455,7 @@ impl Laputa {
         loop {
             let tmp_div_node_ref = Rc::clone(&div_node_ref);
             let mut div_node = tmp_div_node_ref.borrow_mut();
-            if div_node.is_leaf() {
+            if div_node.is_leaf {
                 if div_node.size() > LEAF_NODE_SIZE {
                     // println!(
                     //     ">>> Divide leaf node [{} - {}]",
@@ -466,7 +464,7 @@ impl Laputa {
                     // );
                     let div_index = div_node.words.len() / 2;
                     let words = div_node.words.drain(div_index..).collect();
-                    let new_leaf_ref = create_node_ref_with_data(words, Vec::new());
+                    let new_leaf_ref = create_node_ref_with_data(words, Vec::new(), false);
                     let mut new_leaf = new_leaf_ref.borrow_mut();
                     let new_parent_key = new_leaf.words[0].key.clone();
                     match &div_node.parent {
@@ -580,7 +578,7 @@ impl Laputa {
         loop {
             let tmp_node_ref = Rc::clone(&node_ref);
             let tmp_node = tmp_node_ref.borrow();
-            if tmp_node.is_leaf() {
+            if tmp_node.is_leaf {
                 break;
             } else {
                 let last_index = tmp_node.children.len() - 1;
@@ -593,7 +591,7 @@ impl Laputa {
         loop {
             let tmp_node_ref = Rc::clone(&node_ref);
             let mut tmp_node = tmp_node_ref.borrow_mut();
-            if !tmp_node.is_leaf() {
+            if !tmp_node.is_leaf {
                 let mut children_saved = true;
                 for i in (0..tmp_node.children.len()).rev() {
                     let tmp_child_node_ref = Rc::clone(&tmp_node.children[i]);
@@ -609,7 +607,7 @@ impl Laputa {
                 }
             }
             let mut node_buf = tmp_node.to_vec();
-            if tmp_node.is_leaf() {
+            if tmp_node.is_leaf {
                 let mut leaf_offset_buf = u64_to_u8v(leaf_offset);
                 node_buf.append(&mut leaf_offset_buf);
                 let mut leaf_size_buf = u32_to_u8v(leaf_size);
@@ -619,7 +617,7 @@ impl Laputa {
             let buf = compress(&node_buf);
             tmp_node.compressed_size = buf.len() as u32;
             offset += buf.len() as u64;
-            if tmp_node.is_leaf() {
+            if tmp_node.is_leaf {
                 leaf_offset = tmp_node.offset;
                 leaf_size = buf.len() as u32;
             }

@@ -12,10 +12,10 @@ Root Node offset | (8B) root_node_length = file_size - root_node_offset - 9
 #### Node
 Title          | Structure
 ---------------|-----------------
+is leaf        | (1B) 0 - leaf; other - !leaf
 Word count     | (4B)
 Words          | (key length 4B)(key)(value length 4B)(value)...
-Children count | (4B)
-Children       | cc > 1: (child offset 8B)(child length 4B)...<br>cc == 1: (next sibling offset 8B)(next sibling length 4B)...<br>Offset of the last leaf node' child is 0
+Children       | !leaf : (child offset 8B)(child length 4B)...<br> leaf: (next sibling offset 8B)(next sibling length 4B)...<br>Offset of the last leaf node' child is 0
 
 ## Raw
 #### Fields
