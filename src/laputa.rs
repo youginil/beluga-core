@@ -31,7 +31,7 @@ fn compress(buf: &[u8]) -> Vec<u8> {
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct Metadata {
-    spec: u8,
+    pub spec: u8,
     pub version: String,
     pub word_number: u64,
     pub author: String,

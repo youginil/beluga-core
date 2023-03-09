@@ -3,7 +3,8 @@ use std::{cell::RefCell, rc::Rc};
 use crate::{
     dictionary::{Dictionary, LruCacheRef},
     error::LaputaResult,
-    lru::LruCache, laputa::Metadata,
+    laputa::Metadata,
+    lru::LruCache,
 };
 
 pub struct Bookshelf {
@@ -23,12 +24,13 @@ impl Bookshelf {
         }
     }
 
-    pub fn add(&mut self, path: &str) -> LaputaResult<u32> {
+    pub fn add(&mut self, path: &str) -> LaputaResult<(u32, Metadata)> {
         let (dict, cache_id) = Dictionary::new(path, &self.cache, self.cache_id)?;
+        let metadata = dict.metadata();
         self.cache_id = cache_id + 1;
         self.dictionaries.push((self.dict_id, dict));
         self.dict_id += 1;
-        Ok(self.dict_id)
+        Ok((self.dict_id, metadata))
     }
 
     pub fn remove(&mut self, id: u32) {
@@ -47,15 +49,6 @@ impl Bookshelf {
 
     pub fn clear(&mut self) {
         self.dictionaries.clear();
-    }
-
-    pub fn metadata(&self, id: u32) -> Option<Metadata> {
-        for d in &self.dictionaries {
-            if d.0 == id {
-                return Some(d.1.metadata());
-            }
-        }
-        None
     }
 
     pub fn search(&mut self, id: u32, word: &str, limit: usize) -> Vec<String> {
@@ -85,22 +78,13 @@ impl Bookshelf {
         None
     }
 
-    pub fn get_js(&self, id: u32) -> String {
+    pub fn get_js_css(&self, id: u32) -> Option<(String, String)> {
         for (i, d) in &self.dictionaries {
             if *i == id {
-                return d.js.clone();
+                return Some((d.js.clone(), d.css.clone()));
             }
         }
-        String::from("")
-    }
-
-    pub fn get_css(&self, id: u32) -> String {
-        for (i, d) in &self.dictionaries {
-            if *i == id {
-                return d.css.clone();
-            }
-        }
-        String::from("")
+        None
     }
 
     pub fn resize_cache(&mut self, cap: u64) {
