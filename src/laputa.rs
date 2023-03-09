@@ -9,10 +9,12 @@ use std::io::{prelude::*, SeekFrom};
 use std::path::Path;
 use std::rc::Rc;
 
-const LEAF_NODE_SIZE: usize = 32 * 1024;
-const INDEX_NODE_SIZE: usize = 32 * 1024;
+const LEAF_NODE_SIZE: usize = 64 * 1024;
+const INDEX_NODE_SIZE: usize = 64 * 1024;
 pub const EXT_WORD: &str = "lpw";
 pub const EXT_RESOURCE: &str = "lpr";
+pub const EXT_RAW_WORD: &str = "lpwdb";
+pub const EXT_RAW_RESOURCE: &str = "lprdb";
 
 pub fn parse_file_type(file: &str) -> LaputaResult<LapFileType> {
     let ext = file.split(".").last();
@@ -33,7 +35,7 @@ fn compress(buf: &[u8]) -> Vec<u8> {
 pub struct Metadata {
     pub spec: u8,
     pub version: String,
-    pub word_number: u64,
+    pub word_num: u64,
     pub author: String,
     pub email: String,
     pub create_time: String,
@@ -45,7 +47,7 @@ impl Metadata {
         Self {
             spec: 1,
             version: String::from(""),
-            word_number: 0,
+            word_num: 0,
             author: String::from(""),
             email: String::from(""),
             create_time: String::from(""),
@@ -57,7 +59,7 @@ impl Metadata {
 #[derive(Clone, Serialize, Deserialize)]
 struct Word {
     key: String,
-    value: Vec<u8>,
+    value: Option<Vec<u8>>,
     lower_key: String,
 }
 
@@ -66,7 +68,7 @@ impl Word {
         let lk = key.to_lowercase();
         Self {
             key,
-            value: Vec::new(),
+            value: None,
             lower_key: lk.to_string(),
         }
     }
@@ -75,13 +77,17 @@ impl Word {
         let lk = key.to_lowercase();
         Self {
             key,
-            value,
+            value: Some(value),
             lower_key: lk.to_string(),
         }
     }
 
     fn size(&self) -> usize {
-        4 + 4 + self.key.bytes().len() + self.value.len()
+        let size = 4 + self.key.bytes().len();
+        match &self.value {
+            Some(v) => size + v.len() + 4,
+            None => 0,
+        }
     }
 
     fn compare(&self, other: &Word) -> i8 {
@@ -109,18 +115,20 @@ impl Word {
         let mut buf: Vec<u8> = Vec::new();
         let mut key_size = u32_to_u8v(k.len() as u32);
         buf.append(&mut key_size);
-        let mut value_size = u32_to_u8v(self.value.len() as u32);
         buf.append(&mut k);
-        buf.append(&mut value_size);
-        buf.append(&mut self.value);
+        if let Some(v) = &mut self.value {
+            let mut value_size = u32_to_u8v(v.len() as u32);
+            buf.append(&mut value_size);
+            buf.append(v);
+        }
         return buf;
     }
 }
 
 type NodeRef = Rc<RefCell<Node>>;
 
-fn create_node_ref() -> NodeRef {
-    return Rc::new(RefCell::new(Node::new()));
+fn create_node_ref(is_leaf: bool) -> NodeRef {
+    return Rc::new(RefCell::new(Node::new(is_leaf)));
 }
 
 fn create_node_ref_with_data(words: Vec<Word>, children: Vec<NodeRef>, is_leaf: bool) -> NodeRef {
@@ -186,12 +194,12 @@ struct Node {
 }
 
 impl Node {
-    fn new() -> Self {
+    fn new(is_leaf: bool) -> Self {
         Self {
             words: Vec::new(),
             children: Vec::new(),
             parent: None,
-            is_leaf: true,
+            is_leaf,
             offset: 0,
             compressed_size: 0,
         }
@@ -209,14 +217,14 @@ impl Node {
     }
 
     fn size(&self) -> usize {
-        let mut size: usize = 8;
+        let mut size: usize = 1 + 4;
         for i in 0..self.words.len() {
             size += self.words[i].size();
         }
-        if self.children.len() == 0 {
-            size += 12;
+        if self.is_leaf {
+            size += 8 + 4;
         } else {
-            size += 12 * self.children.len();
+            size += (8 + 4) * self.children.len();
         }
         return size;
     }
@@ -325,15 +333,15 @@ impl Node {
     }
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub enum LapFileType {
     Word,
     Resource,
 }
 
 pub struct Laputa {
-    metadata: Metadata,
-    file_type: LapFileType,
+    pub metadata: Metadata,
+    pub file_type: LapFileType,
     root: NodeRef,
     node_count: usize,
     leaves: Rc<RefCell<Vec<NodeRef>>>, // only for parse
@@ -341,7 +349,7 @@ pub struct Laputa {
 
 impl Laputa {
     pub fn new(metadata: Metadata, file_type: LapFileType) -> Self {
-        let root = Rc::new(RefCell::new(Node::new()));
+        let root = Rc::new(RefCell::new(Node::new(true)));
         Self {
             metadata,
             file_type,
@@ -419,7 +427,7 @@ impl Laputa {
     }
 
     pub fn input_word(&mut self, name: String, value: Vec<u8>) {
-        self.metadata.word_number += 1;
+        self.metadata.word_num += 1;
         if self.root.borrow().words.len() == 0 {
             self.root
                 .borrow_mut()
@@ -464,7 +472,7 @@ impl Laputa {
                     // );
                     let div_index = div_node.words.len() / 2;
                     let words = div_node.words.drain(div_index..).collect();
-                    let new_leaf_ref = create_node_ref_with_data(words, Vec::new(), false);
+                    let new_leaf_ref = create_node_ref_with_data(words, Vec::new(), true);
                     let mut new_leaf = new_leaf_ref.borrow_mut();
                     let new_parent_key = new_leaf.words[0].key.clone();
                     match &div_node.parent {
@@ -483,7 +491,7 @@ impl Laputa {
                             self.node_count += 1;
                         }
                         None => {
-                            let parent = create_node_ref();
+                            let parent = create_node_ref(false);
                             let mut pa = parent.borrow_mut();
                             pa.insert(Word::new(new_parent_key), 0);
                             // println!("> Create parent [{}]", pa.words[0].key,);
@@ -509,7 +517,7 @@ impl Laputa {
                 let mut words: Vec<Word> = div_node.words.drain(div_index..).collect();
                 let pword = div_node.words.pop().unwrap();
                 let children: Vec<NodeRef> = div_node.children.drain(div_index..).collect();
-                let new_index_ref = create_node_ref();
+                let new_index_ref = create_node_ref(false);
                 let mut new_index = new_index_ref.borrow_mut();
                 new_index.words.append(&mut words);
                 for i in 0..children.len() {
@@ -532,7 +540,7 @@ impl Laputa {
                         self.node_count += 1;
                     }
                     None => {
-                        let parent = create_node_ref();
+                        let parent = create_node_ref(false);
                         let mut pa = parent.borrow_mut();
                         pa.insert(pword, 0);
                         // println!("> Create parent [{}]", pa.words[0].key);
@@ -631,22 +639,33 @@ impl Laputa {
         }
         let offset_buf = u64_to_u8v(self.root.borrow().offset);
         file.write_all(&offset_buf).expect("Fail to write");
+        file.sync_all().unwrap();
         println!("Done\n{} - {:.2}M", dest, (offset as f64) / 1024.0 / 1024.0);
     }
 
-    pub fn to_raw(&self, dest: &str) {
+    pub fn to_raw<F>(&self, dest: &str, step: F)
+    where
+        F: Fn(),
+    {
+        if !((dest.ends_with(EXT_RAW_WORD) && self.file_type == LapFileType::Word)
+            || (dest.ends_with(EXT_RAW_RESOURCE) && self.file_type == LapFileType::Resource))
+        {
+            panic!("Invalid destination filename");
+        }
         let mut raw = RawDict::new(dest);
         let leaves = self.leaves.borrow();
-        let is_text = match self.file_type {
-            LapFileType::Word => true,
-            LapFileType::Resource => false,
-        };
+        let empty: Vec<u8> = Vec::new();
         for i in 0..leaves.len() {
             let words = &leaves[i].borrow().words;
             for word in words {
-                raw.insert(word.key.as_str(), &word.value[..], is_text);
+                let text = match &word.value {
+                    Some(v) => v,
+                    None => &empty,
+                };
+                raw.insert(word.key.as_str(), text);
+                step();
             }
         }
-        raw.flush(is_text);
+        raw.flush();
     }
 }

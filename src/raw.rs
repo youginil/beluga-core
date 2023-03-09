@@ -1,8 +1,9 @@
-use crate::laputa::{LapFileType, Laputa, Metadata};
+use crate::laputa::{LapFileType, Laputa, Metadata, EXT_RAW_WORD};
 use rusqlite::{params, Connection};
 
 const TABLE_NAME: &str = "word";
 
+#[derive(Debug)]
 struct Word {
     name: String,
     text: Option<String>,
@@ -10,14 +11,20 @@ struct Word {
 }
 
 pub struct RawDict {
+    file_type: LapFileType,
     conn: Connection,
     cache: Vec<Word>,
     cache_size: usize,
 }
 
 impl RawDict {
-    pub fn new(dest: &str) -> Self {
-        let conn = Connection::open(dest).unwrap();
+    pub fn new(filepath: &str) -> Self {
+        let file_type = if filepath.ends_with(EXT_RAW_WORD) {
+            LapFileType::Word
+        } else {
+            LapFileType::Resource
+        };
+        let conn = Connection::open(filepath).unwrap();
         conn.execute(
             "CREATE TABLE word (
                 id     INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -29,24 +36,47 @@ impl RawDict {
             [],
         )
         .unwrap();
+        conn.execute("CREATE INDEX name_idx ON word (name)", [])
+            .unwrap();
         Self {
+            file_type,
             conn,
             cache: Vec::new(),
             cache_size: 200,
         }
     }
 
-    pub fn from(dest: &str) -> Self {
-        let conn = Connection::open(dest).unwrap();
+    pub fn from(filepath: &str) -> Self {
+        let file_type = if filepath.ends_with(EXT_RAW_WORD) {
+            LapFileType::Word
+        } else {
+            LapFileType::Resource
+        };
+        let conn = Connection::open(filepath).unwrap();
         Self {
+            file_type,
             conn,
             cache: Vec::new(),
             cache_size: 200,
         }
     }
 
-    pub fn flush(&mut self, is_text: bool) {
-        let field = if is_text { "text" } else { "binary" };
+    pub fn total(&self) -> u64 {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT count(*) as total from word")
+            .unwrap();
+        let mut rows = stmt.query(params![]).unwrap();
+        let row = rows.next().unwrap().unwrap();
+        row.get(0).unwrap()
+    }
+
+    pub fn flush(&mut self) {
+        let field = if self.file_type == LapFileType::Word {
+            "text"
+        } else {
+            "binary"
+        };
         let tx = self.conn.transaction().unwrap();
         let sql = format!(
             "INSERT INTO {} (name, {}) VALUES ($1, $2)",
@@ -66,8 +96,8 @@ impl RawDict {
         self.cache.clear();
     }
 
-    pub fn insert(&mut self, name: &str, value: &[u8], is_text: bool) {
-        if is_text {
+    pub fn insert(&mut self, name: &str, value: &[u8]) {
+        if self.file_type == LapFileType::Word {
             self.cache.push(Word {
                 name: String::from(name),
                 text: Some(String::from_utf8(value.to_vec()).unwrap()),
@@ -81,23 +111,33 @@ impl RawDict {
             });
         }
         if self.cache.len() >= self.cache_size {
-            self.flush(is_text);
+            self.flush();
         }
     }
 
-    pub fn to_laputa(&self, dest: &str, ft: LapFileType) {
+    pub fn to_laputa<F>(&self, dest: &str, step: F)
+    where
+        F: Fn(),
+    {
         let meta = Metadata::new();
-        let mut lp = Laputa::new(meta, ft);
-        let mut offset = 0;
+        let mut lp = Laputa::new(meta, self.file_type);
+        let mut id = 0;
         let limit = 100;
         loop {
             let mut stmt = self
                 .conn
-                .prepare(format!("SELECT * FROM {} LIMIT $1 OFFSET $2", TABLE_NAME).as_str())
+                .prepare(
+                    format!(
+                        "SELECT * FROM {} WHERE id > $1 ORDER BY id ASC LIMIT $2",
+                        TABLE_NAME
+                    )
+                    .as_str(),
+                )
                 .unwrap();
-            let mut list = stmt.query(params![offset, limit]).unwrap();
+            let mut list = stmt.query(params![id, limit]).unwrap();
             let mut rows: Vec<Word> = Vec::new();
             while let Ok(Some(row)) = list.next() {
+                id = row.get(0).unwrap();
                 rows.push(Word {
                     name: row.get(1).unwrap(),
                     text: row.get(2).unwrap(),
@@ -106,17 +146,17 @@ impl RawDict {
             }
             let mut counter = 0;
             for word in rows {
-                let value = match ft {
+                let value = match self.file_type {
                     LapFileType::Word => word.text.unwrap().as_bytes().to_vec(),
                     LapFileType::Resource => word.binary.unwrap(),
                 };
                 lp.input_word(word.name, value);
                 counter = counter + 1;
+                step();
             }
             if counter < limit {
                 break;
             }
-            offset = offset + limit;
         }
         lp.save(dest);
     }

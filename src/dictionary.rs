@@ -140,8 +140,12 @@ impl DictFile {
                 let size = scanner.read_u32();
                 if let Ok(name) = scanner.read_string(size as usize) {
                     let size = scanner.read_u32();
-                    let value = if size > 0 {
-                        Some(scanner.read(size as usize))
+                    let value = if node.is_leaf {
+                        if size > 0 {
+                            Some(scanner.read(size as usize))
+                        } else {
+                            None
+                        }
                     } else {
                         None
                     };

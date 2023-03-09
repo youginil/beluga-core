@@ -5,7 +5,7 @@
 Title            | Structure
 -----------------|-------------
 Metadata length  | (4B)
-Metadata         | {spec: u8, version: String, word_number: u64, author: String, email: String, create_time: String, comment: String}
+Metadata         | {spec: u8, version: String, word_num: u64, author: String, email: String, create_time: String, comment: String}
 Nodes            | (node compressed by Deflate)...
 Root Node offset | (8B) root_node_length = file_size - root_node_offset - 9
 
@@ -14,7 +14,7 @@ Title          | Structure
 ---------------|-----------------
 is leaf        | (1B) 0 - leaf; other - !leaf
 Word count     | (4B)
-Words          | (key length 4B)(key)(value length 4B)(value)...
+Words          | (key length 4B)(key) (leaf ? (value length 4B)(value) : None)...
 Children       | !leaf : (child offset 8B)(child length 4B)...<br> leaf: (next sibling offset 8B)(next sibling length 4B)...<br>Offset of the last leaf node' child is 0
 
 ## Raw
@@ -73,3 +73,4 @@ select * from word group by name having count(*) > 1;
 - Fulltext search for words. phrase, idoms
 - `https://crates.io/crates/anyhow`, `https://crates.io/crates/thiserror`
 - Performance monitor
+- input_word(..., trim_space: bool)

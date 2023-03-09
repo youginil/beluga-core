@@ -1,3 +1,4 @@
+#[derive(Debug)]
 pub enum LaputaError {
     InvalidDictName = 1,
     InvalidDictFile = 2,
