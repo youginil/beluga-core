@@ -74,3 +74,4 @@ select * from word group by name having count(*) > 1;
 - `https://crates.io/crates/anyhow`, `https://crates.io/crates/thiserror`
 - Performance monitor
 - input_word(..., trim_space: bool)
+- Tire tree

@@ -137,11 +137,11 @@ fn create_node_ref_with_data(words: Vec<Word>, children: Vec<NodeRef>, is_leaf: 
 
 fn create_node_ref_from_bytes(
     bytes: &[u8],
-    offset: usize,
-    size: usize,
+    offset: u64,
+    size: u32,
     leaves: Rc<RefCell<Vec<NodeRef>>>,
 ) -> NodeRef {
-    let slice = &bytes[offset..(offset + size)];
+    let slice = &bytes[offset as usize..(offset as usize + size as usize)];
     let mut decode = DeflateDecoder::new(slice);
     let mut data: Vec<u8> = Vec::new();
     decode.read_to_end(&mut data).unwrap();
@@ -155,30 +155,33 @@ fn create_node_ref_from_bytes(
         let b = data[pos..(pos + word_length)].to_vec();
         pos += word_length;
         let key = String::from_utf8(b).unwrap();
-        let value_length = u8v_to_u32(&data[pos..(pos + 4)]) as usize;
-        pos += 4;
-        let b = data[pos..(pos + value_length)].to_vec();
-        pos += value_length;
-        words.push(Word::with_value(key, b));
+        let wd = if is_leaf {
+            let value_length = u8v_to_u32(&data[pos..(pos + 4)]) as usize;
+            pos += 4;
+            let b = data[pos..(pos + value_length)].to_vec();
+            pos += value_length;
+            Word::with_value(key, b)
+        } else {
+            Word::new(key)
+        };
+        words.push(wd);
     }
-    println!("Node [{} ~ {}]", words[0].key, words[words.len() - 1].key);
+    println!("{:5} words [{} ~ {}]", words.len(), words[0].key, words[words.len() - 1].key);
     let node_ref = create_node_ref_with_data(words, Vec::new(), is_leaf);
     let mut children: Vec<NodeRef> = Vec::new();
-    let cc = u8v_to_u32(&data[pos..(pos + 4)]);
-    pos += 4;
-    if cc > 1 {
-        for _ in 0..cc {
-            let offset = u8v_to_u64(&data[pos..(pos + 8)]) as usize;
+    if is_leaf {
+        leaves.borrow_mut().push(Rc::clone(&node_ref));
+    } else {
+        for _ in 0..(wc + 1) {
+            let offset = u8v_to_u64(&data[pos..(pos + 8)]);
             pos += 8;
-            let size = u8v_to_u32(&data[pos..(pos + 4)]) as usize;
+            let size = u8v_to_u32(&data[pos..(pos + 4)]);
             pos += 4;
             let leaves_cloned = Rc::clone(&leaves);
             let child = create_node_ref_from_bytes(bytes, offset, size, leaves_cloned);
             child.borrow_mut().parent = Some(Rc::clone(&node_ref));
             children.push(child);
         }
-    } else {
-        leaves.borrow_mut().push(Rc::clone(&node_ref));
     }
     node_ref.borrow_mut().children = children;
     return node_ref;
@@ -359,71 +362,46 @@ impl Laputa {
         }
     }
 
-    pub fn from_file(filepath: &str) -> LaputaResult<Self> {
-        let ext = match parse_file_type(filepath) {
-            Ok(r) => r,
-            Err(e) => return Err(e),
-        };
-        let mut file = match File::open(filepath) {
-            Ok(r) => r,
-            Err(_) => return Err(LaputaError::InvalidDictFile),
-        };
+    pub fn from_file(filepath: &str) -> Self {
+        let ext = parse_file_type(filepath).unwrap();
+        let mut file = File::open(filepath).unwrap();
         let mut buf: Vec<u8> = vec![0; 4];
-        if let Ok(size) = file.read(&mut buf) {
-            if size != buf.len() {
-                return Err(LaputaError::InvalidDictFile);
-            }
-        } else {
-            return Err(LaputaError::InvalidDictFile);
+        let size = file.read(&mut buf).unwrap();
+        if size != buf.len() {
+            panic!("Fail to read {} bytes", buf.len());
         }
         let metadata_length = u8v_to_u32(&buf[..]);
         buf = vec![0; metadata_length as usize];
-        if let Ok(size) = file.read(&mut buf) {
-            if size != buf.len() {
-                return Err(LaputaError::InvalidDictFile);
-            }
-        } else {
-            return Err(LaputaError::InvalidDictFile);
+        let size = file.read(&mut buf).unwrap();
+        if size != buf.len() {
+            panic!("Fail to read {} bytes", buf.len());
         }
-        let metadata = match serde_json::from_slice(&buf[..]) {
-            Ok(r) => r,
-            Err(_) => {
-                return Err(LaputaError::InvalidDictFile);
-            }
-        };
+        let metadata = serde_json::from_slice(&buf[..]).unwrap();
         let mut po = Self::new(metadata, ext);
         // root node
-        if let Err(_) = file.seek(SeekFrom::End(-8)) {
-            return Err(LaputaError::InvalidDictFile);
-        }
+        file.seek(SeekFrom::End(-8)).unwrap();
         buf = vec![0; 8];
-        if let Ok(size) = file.read(&mut buf) {
-            if size != buf.len() {
-                return Err(LaputaError::InvalidDictFile);
-            }
-        } else {
-            return Err(LaputaError::InvalidDictFile);
+        let size = file.read(&mut buf).unwrap();
+        if size != buf.len() {
+            panic!("Fail to read {} bytes", buf.len());
         }
-        let root_offset = u8v_to_u64(&buf[..]) as usize;
-        let file_size = match file.metadata() {
-            Ok(m) => m.len() as usize,
-            Err(_) => return Err(LaputaError::InvalidDictFile),
-        };
-        if let Err(_) = file.seek(SeekFrom::Start(0)) {
-            return Err(LaputaError::InvalidDictFile);
-        }
-        buf = vec![0; file_size];
-        if let Ok(size) = file.read(&mut buf) {
-            if size != buf.len() {
-                return Err(LaputaError::InvalidDictFile);
-            }
-        } else {
-            return Err(LaputaError::InvalidDictFile);
+        let root_offset = u8v_to_u64(&buf[..]);
+        let file_meta = file.metadata().unwrap();
+        let file_size = file_meta.len();
+        file.seek(SeekFrom::Start(0)).unwrap();
+        buf = vec![0; file_size as usize];
+        let size = file.read(&mut buf).unwrap();
+        if size != buf.len() {
+            panic!("Fail to read {} bytes", buf.len());
         }
         let leaves = Rc::clone(&po.leaves);
-        po.root =
-            create_node_ref_from_bytes(&buf[..], root_offset, file_size - 8 - root_offset, leaves);
-        return Ok(po);
+        po.root = create_node_ref_from_bytes(
+            &buf[..],
+            root_offset,
+            (file_size - 8 - root_offset) as u32,
+            leaves,
+        );
+        return po;
     }
 
     pub fn input_word(&mut self, name: String, value: Vec<u8>) {
@@ -643,9 +621,9 @@ impl Laputa {
         println!("Done\n{} - {:.2}M", dest, (offset as f64) / 1024.0 / 1024.0);
     }
 
-    pub fn to_raw<F>(&self, dest: &str, step: F)
+    pub fn to_raw<F>(&self, dest: &str, mut step: F)
     where
-        F: Fn(),
+        F: FnMut(),
     {
         if !((dest.ends_with(EXT_RAW_WORD) && self.file_type == LapFileType::Word)
             || (dest.ends_with(EXT_RAW_RESOURCE) && self.file_type == LapFileType::Resource))

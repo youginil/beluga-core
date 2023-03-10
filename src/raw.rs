@@ -115,9 +115,9 @@ impl RawDict {
         }
     }
 
-    pub fn to_laputa<F>(&self, dest: &str, step: F)
+    pub fn to_laputa<F>(&self, dest: &str, mut step: F)
     where
-        F: Fn(),
+        F: FnMut(),
     {
         let meta = Metadata::new();
         let mut lp = Laputa::new(meta, self.file_type);
