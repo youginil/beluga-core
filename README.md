@@ -7,7 +7,7 @@ Title            | Structure
 Metadata length  | (4B)
 Metadata         | {spec: u8, version: String, word_num: u64, author: String, email: String, create_time: String, comment: String}
 Nodes            | (node compressed by Deflate)...
-Root Node offset | (8B) root_node_length = file_size - root_node_offset - 9
+Root Node        | (root offset 8B) (root size 4B)
 
 #### Node
 Title          | Structure
@@ -62,11 +62,7 @@ select * from word group by name having count(*) > 1;
 
 ## TODO
 - Checksum
-- Spider
 - Remove special chars and set @@@LINK=
-- Add `Node Count` to metadata
-- SQL conversion
-- LSP loading status
 - HTML validation, fix, prettify. `tidy-html5`, `cheerio`
 - Convert resource id to `<a href="audio://a/b/c.mp3">`, `<img data-src="a/b/c.jpg">`
 - Capture. `puppeteer`

@@ -1,4 +1,5 @@
 use crate::laputa::{LapFileType, Laputa, Metadata, EXT_RAW_WORD};
+use pbr::ProgressBar;
 use rusqlite::{params, Connection};
 
 const TABLE_NAME: &str = "word";
@@ -115,10 +116,8 @@ impl RawDict {
         }
     }
 
-    pub fn to_laputa<F>(&self, dest: &str, mut step: F)
-    where
-        F: FnMut(),
-    {
+    pub fn to_laputa(&self, dest: &str) {
+        let mut pb = ProgressBar::new(self.total());
         let meta = Metadata::new();
         let mut lp = Laputa::new(meta, self.file_type);
         let mut id = 0;
@@ -152,12 +151,13 @@ impl RawDict {
                 };
                 lp.input_word(word.name, value);
                 counter = counter + 1;
-                step();
+                pb.inc();
             }
             if counter < limit {
                 break;
             }
         }
+        pb.finish();
         lp.save(dest);
     }
 }

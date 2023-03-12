@@ -1,81 +1,33 @@
 use crate::{
     error::{LaputaError, LaputaResult},
-    laputa::{parse_file_type, LapFileType, Metadata, EXT_RESOURCE},
+    laputa::{parse_file_type, Key, LapFileType, Metadata, Value, EXT_RESOURCE},
     lru::{LruCache, LruValue, SizedValue},
-    utils::{file_metadata, file_open, file_read, file_seek, u8v_to_u32, u8v_to_u64, Scanner},
+    tree::{Node, Serializable},
+    utils::{file_open, file_read, file_seek, u8v_to_u32, Scanner},
 };
 use std::{
     cell::RefCell,
-    cmp::Ordering,
     fs::{self, File},
     io::SeekFrom,
     path::Path,
     rc::Rc,
 };
 
+type LapNode = Node<Key, Value>;
 pub type LruCacheRef = Rc<RefCell<LruCache<(u32, u64), DictNode>>>;
 
-struct DictWord {
-    name: String,
-    value: Option<Vec<u8>>,
-}
-
 pub struct DictNode {
-    is_leaf: bool,
-    words: Vec<DictWord>,
+    node: LapNode,
     children: Vec<(u64, u32)>,
     size: u64,
 }
 
 impl DictNode {
-    fn new() -> Self {
+    fn new(node: LapNode) -> Self {
         Self {
-            is_leaf: true,
-            words: Vec::new(),
+            node,
             children: Vec::new(),
             size: 0,
-        }
-    }
-
-    fn search(&self, name: &str) -> (usize, Ordering) {
-        let words = &self.words;
-        let mut hi = words.len() - 1;
-        let mut li = 0;
-        let n = name.to_string();
-        loop {
-            let mut mi = (hi + li) / 2;
-            let cr = words[mi].name.cmp(&n);
-            match cr {
-                Ordering::Greater => {
-                    hi = mi;
-                }
-                Ordering::Less => {
-                    li = mi;
-                }
-                Ordering::Equal => {
-                    while mi > li {
-                        mi -= 1;
-                        if !words[mi].name.cmp(&n).is_eq() {
-                            mi += 1;
-                            break;
-                        }
-                    }
-                    return (mi, Ordering::Equal);
-                }
-            }
-            if hi == li {
-                return (hi, cr);
-            }
-            if hi - li == 1 {
-                if mi == li {
-                    return (hi, words[hi].name.cmp(&n));
-                }
-                let cr = words[li].name.cmp(&n);
-                if cr.is_ge() {
-                    return (li, Ordering::Less);
-                }
-                return (hi, Ordering::Less);
-            }
         }
     }
 }
@@ -107,12 +59,11 @@ impl DictFile {
                 return Err(LaputaError::InvalidDictFile);
             }
         };
-        file_seek(&mut file, SeekFrom::End(-8))?;
-        buf = file_read(&mut file, 8)?;
-        let root_offset = u8v_to_u64(&buf[..]);
-        let m = file_metadata(&file)?;
-        let file_size = m.len();
-        let root_size = (file_size - root_offset - 8) as u32;
+        file_seek(&mut file, SeekFrom::End(-12))?;
+        buf = file_read(&mut file, 12)?;
+        let mut scanner = Scanner::new(buf);
+        let root_offset = scanner.read_u64();
+        let root_size = scanner.read_u32();
         Ok(Self {
             id: String::from(""),
             metadata,
@@ -131,36 +82,10 @@ impl DictFile {
             return None;
         }
         if let Ok(data) = file_read(&mut self.file, size as usize) {
-            let mut node = DictNode::new();
-            node.size = data.len() as u64;
-            let mut scanner = Scanner::new(data);
-            node.is_leaf = scanner.read_u8() == 0;
-            let wc = scanner.read_u32();
-            for _ in 0..wc {
-                let size = scanner.read_u32();
-                if let Ok(name) = scanner.read_string(size as usize) {
-                    let value = if node.is_leaf {
-                        let size = scanner.read_u32();
-                        if size > 0 {
-                            Some(scanner.read(size as usize))
-                        } else {
-                            None
-                        }
-                    } else {
-                        None
-                    };
-                    node.words.push(DictWord { name, value });
-                } else {
-                    return None;
-                }
-            }
-            let cc = if node.is_leaf { 1 } else { wc + 1 };
-            for _ in 0..cc {
-                let offset = scanner.read_u64();
-                let size = scanner.read_u32();
-                node.children.push((offset, size));
-            }
-            let value = self.cache.borrow_mut().put((self.cache_id, offset), node);
+            let (node, children) = Node::<Key, Value>::from_bytes(data);
+            let mut dnode = DictNode::new(node);
+            dnode.children = children;
+            let value = self.cache.borrow_mut().put((self.cache_id, offset), dnode);
             return Some(value);
         }
         None
@@ -171,20 +96,22 @@ impl DictFile {
         let mut offset = self.root.0;
         let mut size = self.root.1;
         loop {
-            let node = match self.get_node(offset, size) {
+            let dict_node = match self.get_node(offset, size) {
                 Some(nd) => nd,
                 None => {
                     return result;
                 }
             };
-            let dn = node.borrow();
-            let (wi, cr) = dn.search(name);
-            if dn.is_leaf {
+            let dn = dict_node.borrow();
+            let node = &dn.node;
+            let key = Key(name.to_string());
+            let (wi, cr) = dn.node.index_of(&key);
+            if node.is_leaf {
                 if cr.is_ge() {
-                    for i in wi..dn.words.len() {
-                        let wd = &dn.words[i].name;
-                        if wd.starts_with(name) {
-                            result.push(wd.clone());
+                    for i in wi..node.records.len() {
+                        let k = &node.records[i].key;
+                        if k.0.starts_with(name) {
+                            result.push(k.0.clone());
                         } else {
                             return result;
                         }
@@ -198,11 +125,11 @@ impl DictFile {
                     if next_offset == 0 {
                         return result;
                     }
-                    if let Some(node) = self.get_node(next_offset, next_size) {
-                        let dn = node.borrow();
-                        for word in &dn.words {
-                            if word.name.starts_with(name) {
-                                result.push(word.name.clone());
+                    if let Some(dict_node) = self.get_node(next_offset, next_size) {
+                        let dn = dict_node.borrow();
+                        for rec in &dn.node.records {
+                            if rec.key.0.starts_with(name) {
+                                result.push(rec.key.0.clone());
                             } else {
                                 return result;
                             }
@@ -228,21 +155,23 @@ impl DictFile {
         let mut offset = self.root.0;
         let mut size = self.root.1;
         loop {
-            let node = match self.get_node(offset, size) {
+            let dict_node = match self.get_node(offset, size) {
                 Some(nd) => nd,
                 None => {
                     return None;
                 }
             };
-            let dn = node.borrow();
-            let (index, cr) = dn.search(name);
-            if dn.is_leaf {
-                let words = &dn.words;
+            let dn = dict_node.borrow();
+            let node = &dn.node;
+            let key = Key(name.to_string());
+            let (index, cr) = node.index_of(&key);
+            if node.is_leaf {
+                let records = &node.records;
                 if cr.is_ge() {
-                    for i in index..words.len() {
-                        let wd = &words[i];
-                        if wd.name == name {
-                            return Some(wd.value.as_ref().unwrap().clone());
+                    for i in index..records.len() {
+                        let rec = &records[i];
+                        if rec.key == key {
+                            return Some(rec.value.as_ref().unwrap().bytes());
                         }
                     }
                 }

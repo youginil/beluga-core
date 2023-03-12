@@ -1,7 +1,6 @@
 use std::{
     fs::File,
     io::{Read, Seek, SeekFrom},
-    string::FromUtf8Error,
 };
 
 use crate::error::{LaputaError, LaputaResult};
@@ -61,7 +60,9 @@ impl Scanner {
     }
 
     pub fn read(&mut self, n: usize) -> Vec<u8> {
-        self.buf[self.pos..self.pos + n].to_vec()
+        let r = self.buf[self.pos..self.pos + n].to_vec();
+        self.forward(n);
+        r
     }
 
     pub fn read_u64(&mut self) -> u64 {
@@ -81,16 +82,10 @@ impl Scanner {
         self.forward(1);
         r
     }
-
-    pub fn read_string(&mut self, n: usize) -> Result<String, FromUtf8Error> {
-        let s = String::from_utf8(self.buf[self.pos..self.pos + n].to_vec());
-        self.pos += n;
-        s
-    }
 }
 
 pub fn file_read(file: &mut File, n: usize) -> LaputaResult<Vec<u8>> {
-    let mut buf: Vec<u8> = Vec::with_capacity(n);
+    let mut buf: Vec<u8> = vec![0; n];
     if let Ok(size) = file.read(&mut buf) {
         if size != buf.len() {
             return Err(LaputaError::InvalidDictFile);
@@ -106,14 +101,6 @@ pub fn file_seek(file: &mut File, pos: SeekFrom) -> LaputaResult<()> {
         return Err(LaputaError::InvalidDictFile);
     }
     Ok(())
-}
-
-pub fn file_metadata(file: &File) -> LaputaResult<std::fs::Metadata> {
-    if let Ok(m) = file.metadata() {
-        return Ok(m);
-    } else {
-        return Err(LaputaError::InvalidDictFile);
-    }
 }
 
 pub fn file_open(filepath: &str) -> LaputaResult<File> {
