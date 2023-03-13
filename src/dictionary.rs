@@ -1,6 +1,6 @@
 use crate::{
     error::{LaputaError, LaputaResult},
-    laputa::{parse_file_type, Key, LapFileType, Metadata, Value, EXT_RESOURCE},
+    laputa::{parse_file_type, EntryKey, EntryValue, LapFileType, Laputa, Metadata, EXT_RESOURCE},
     lru::{LruCache, LruValue, SizedValue},
     tree::{Node, Serializable},
     utils::{file_open, file_read, file_seek, u8v_to_u32, Scanner},
@@ -13,17 +13,17 @@ use std::{
     rc::Rc,
 };
 
-type LapNode = Node<Key, Value>;
+type EntryNode = Node<EntryKey, EntryValue>;
 pub type LruCacheRef = Rc<RefCell<LruCache<(u32, u64), DictNode>>>;
 
 pub struct DictNode {
-    node: LapNode,
+    node: EntryNode,
     children: Vec<(u64, u32)>,
     size: u64,
 }
 
 impl DictNode {
-    fn new(node: LapNode) -> Self {
+    fn new(node: EntryNode) -> Self {
         Self {
             node,
             children: Vec::new(),
@@ -42,7 +42,8 @@ struct DictFile {
     id: String,
     metadata: Metadata,
     file: File,
-    root: (u64, u32),
+    entry_root: (u64, u32),
+    token_root: (u64, u32),
     cache_id: u32,
     cache: LruCacheRef,
 }
@@ -59,16 +60,19 @@ impl DictFile {
                 return Err(LaputaError::InvalidDictFile);
             }
         };
-        file_seek(&mut file, SeekFrom::End(-12))?;
-        buf = file_read(&mut file, 12)?;
+        file_seek(&mut file, SeekFrom::End(-24))?;
+        buf = file_read(&mut file, 24)?;
         let mut scanner = Scanner::new(buf);
-        let root_offset = scanner.read_u64();
-        let root_size = scanner.read_u32();
+        let entry_root_offset = scanner.read_u64();
+        let entry_root_size = scanner.read_u32();
+        let token_root_offset = scanner.read_u64();
+        let token_root_size = scanner.read_u32();
         Ok(Self {
             id: String::from(""),
             metadata,
             file,
-            root: (root_offset, root_size),
+            entry_root: (entry_root_offset, entry_root_size),
+            token_root: (token_root_offset, token_root_size),
             cache_id,
             cache,
         })
@@ -82,7 +86,7 @@ impl DictFile {
             return None;
         }
         if let Ok(data) = file_read(&mut self.file, size as usize) {
-            let (node, children) = Node::<Key, Value>::from_bytes(data);
+            let (node, children) = Node::<EntryKey, EntryValue>::from_bytes(data);
             let mut dnode = DictNode::new(node);
             dnode.children = children;
             let value = self.cache.borrow_mut().put((self.cache_id, offset), dnode);
@@ -91,10 +95,10 @@ impl DictFile {
         None
     }
 
-    pub fn search(&mut self, name: &str, limit: usize) -> Vec<String> {
+    pub fn search(&mut self, name: &str, fuzzy_limit: usize) -> Vec<String> {
         let mut result: Vec<String> = Vec::new();
-        let mut offset = self.root.0;
-        let mut size = self.root.1;
+        let mut offset = self.entry_root.0;
+        let mut size = self.entry_root.1;
         loop {
             let dict_node = match self.get_node(offset, size) {
                 Some(nd) => nd,
@@ -104,7 +108,7 @@ impl DictFile {
             };
             let dn = dict_node.borrow();
             let node = &dn.node;
-            let key = Key(name.to_string());
+            let key = EntryKey(name.to_string());
             let (wi, cr) = dn.node.index_of(&key);
             if node.is_leaf {
                 if cr.is_ge() {
@@ -115,7 +119,7 @@ impl DictFile {
                         } else {
                             return result;
                         }
-                        if result.len() >= limit {
+                        if result.len() >= fuzzy_limit {
                             return result;
                         }
                     }
@@ -133,7 +137,7 @@ impl DictFile {
                             } else {
                                 return result;
                             }
-                            if result.len() >= limit {
+                            if result.len() >= fuzzy_limit {
                                 return result;
                             }
                         }
@@ -151,9 +155,9 @@ impl DictFile {
         }
     }
 
-    pub fn search_entry(&mut self, name: &str) -> Option<Vec<u8>> {
-        let mut offset = self.root.0;
-        let mut size = self.root.1;
+    pub fn search_entry(&mut self, root: (u64, u32), name: &str) -> Option<Vec<u8>> {
+        let mut offset = root.0;
+        let mut size = root.1;
         loop {
             let dict_node = match self.get_node(offset, size) {
                 Some(nd) => nd,
@@ -163,7 +167,7 @@ impl DictFile {
             };
             let dn = dict_node.borrow();
             let node = &dn.node;
-            let key = Key(name.to_string());
+            let key = EntryKey(name.to_string());
             let (index, cr) = node.index_of(&key);
             if node.is_leaf {
                 let records = &node.records;
@@ -274,12 +278,20 @@ impl Dictionary {
         self.word.metadata.clone()
     }
 
-    pub fn search(&mut self, name: &str, limit: usize) -> Vec<String> {
-        self.word.search(name, limit)
+    pub fn search(&mut self, name: &str, fuzzy_limit: usize) -> Vec<String> {
+        let mut result = self.word.search(name, fuzzy_limit);
+        if let Some(data) = self.word.search_entry(self.word.token_root, name) {
+            for entry_name in Laputa::parse_token_entries(data) {
+                if !result.contains(&entry_name) {
+                    result.push(entry_name);
+                }
+            }
+        }
+        result
     }
 
     pub fn search_word(&mut self, name: &str) -> Option<String> {
-        if let Some(data) = self.word.search_entry(name) {
+        if let Some(data) = self.word.search_entry(self.word.entry_root, name) {
             if let Ok(s) = String::from_utf8(data) {
                 return Some(s);
             }
@@ -294,7 +306,7 @@ impl Dictionary {
         };
         for (_, dict) in self.resources.iter_mut().enumerate() {
             if dict.id == id {
-                return dict.search_entry(n);
+                return dict.search_entry(dict.entry_root, n);
             }
         }
         None

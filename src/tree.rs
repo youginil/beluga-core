@@ -221,7 +221,11 @@ fn parse_node<K: PartialOrd + Ord + Serializable + Clone + Display, V: Serializa
     offset: u64,
     size: u32,
     leaves: &mut Vec<NodeRef<K, V>>,
+    level: usize
 ) -> (NodeRef<K, V>, usize) {
+    if size == 0 {
+        return (create_node_ref(Node::new(true)), 1);
+    }
     file_seek(file, SeekFrom::Start(offset)).unwrap();
     let bytes = file_read(file, size as usize).unwrap();
     let mut decode = DeflateDecoder::new(&bytes[..]);
@@ -231,6 +235,7 @@ fn parse_node<K: PartialOrd + Ord + Serializable + Clone + Display, V: Serializa
     let node_ref = create_node_ref(node);
     node_ref.borrow_mut().offset = offset;
     node_ref.borrow_mut().zip_size = size;
+    node_ref.borrow().print(level);
     let mut node_num = 1;
     if node_ref.borrow().is_leaf {
         leaves.push(node_ref.clone());
@@ -239,7 +244,7 @@ fn parse_node<K: PartialOrd + Ord + Serializable + Clone + Display, V: Serializa
             if child.1 == 0 {
                 break;
             }
-            let (child_node_ref, child_node_num) = parse_node(file, child.0, child.1, leaves);
+            let (child_node_ref, child_node_num) = parse_node(file, child.0, child.1, leaves, level + 1);
             child_node_ref.borrow_mut().parent = Some(node_ref.clone());
             node_ref.borrow_mut().children.push(child_node_ref);
             node_num += child_node_num;
@@ -277,19 +282,7 @@ impl<K: PartialOrd + Ord + Serializable + Clone + Display, V: Serializable> Tree
         leaf_size_limit: usize,
     ) -> Self {
         let mut leaves: Vec<NodeRef<K, V>> = vec![];
-        let (root, node_num) = parse_node(file, root_offset, root_size, &mut leaves);
-        // for leave in &leaves {
-        //     let l = leave.borrow();
-        //     println!(
-        //         "{} ({:10}, {:5}) {:5} [{} ~ {}]",
-        //         l.is_leaf,
-        //         l.offset,
-        //         l.zip_size,
-        //         l.records.len(),
-        //         l.records[0].key,
-        //         l.records.last().unwrap().key
-        //     );
-        // }
+        let (root, node_num) = parse_node(file, root_offset, root_size, &mut leaves, 1);
         Self {
             root,
             leaves,
@@ -297,6 +290,11 @@ impl<K: PartialOrd + Ord + Serializable + Clone + Display, V: Serializable> Tree
             index_size_limit,
             leaf_size_limit,
         }
+    }
+
+    #[allow(dead_code)]
+    pub fn print(&self) {
+        self.root.borrow().print(1);
     }
 
     pub fn insert(&mut self, key: K, value: V) {
@@ -405,8 +403,9 @@ impl<K: PartialOrd + Ord + Serializable + Clone + Display, V: Serializable> Tree
     }
 
     pub fn write_to(&self, file: &mut File) -> (u64, u32) {
-        let mut pb = ProgressBar::new(self.node_num as u64);
-        let mut level = 1;
+        if self.root.borrow().records.len() == 0 {
+            return (0, 0);
+        }
         let mut node_ref = self.root.clone();
         loop {
             let tmp_node_ref = node_ref.clone();
@@ -416,12 +415,12 @@ impl<K: PartialOrd + Ord + Serializable + Clone + Display, V: Serializable> Tree
             } else {
                 let last_index = tmp_node.children.len() - 1;
                 node_ref = Rc::clone(&tmp_node.children[last_index]);
-                level += 1;
             }
         }
         let mut offset = file.stream_position().expect("Fail to get stream position");
         let mut leaf_offset: u64 = 0;
         let mut leaf_size: u32 = 0;
+        let mut pb = ProgressBar::new(self.node_num as u64);
         loop {
             let tmp_node_ref = node_ref.clone();
             let mut tmp_node = tmp_node_ref.borrow_mut();
@@ -433,7 +432,6 @@ impl<K: PartialOrd + Ord + Serializable + Clone + Display, V: Serializable> Tree
                     if tmp_child_node.offset == 0 {
                         children_all_saved = false;
                         node_ref = tmp_child_node_ref.clone();
-                        level += 1;
                         break;
                     }
                 }
@@ -457,16 +455,15 @@ impl<K: PartialOrd + Ord + Serializable + Clone + Display, V: Serializable> Tree
                 leaf_size = buf.len() as u32;
             }
             file.write(&buf).expect("Failt to write");
-            tmp_node.print(level);
             pb.inc();
             match &tmp_node.parent {
                 Some(p) => {
                     node_ref = p.clone();
-                    level -= 1;
                 }
                 None => break,
             }
         }
+        file.sync_all().unwrap();
         pb.finish();
         let root_node = self.root.borrow();
         (root_node.offset, root_node.zip_size)
