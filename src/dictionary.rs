@@ -1,5 +1,5 @@
 use crate::{
-    error::{LaputaError, LaputaResult},
+    error::LaputaResult,
     laputa::{parse_file_type, EntryKey, EntryValue, LapFileType, Laputa, Metadata, EXT_RESOURCE},
     lru::{LruCache, LruValue, SizedValue},
     tree::{Node, Serializable},
@@ -57,7 +57,7 @@ impl DictFile {
         let metadata = match serde_json::from_slice(&buf[..]) {
             Ok(r) => r,
             Err(_) => {
-                return Err(LaputaError::InvalidDictFile);
+                return Err("Fail to parse metadata".to_string());
             }
         };
         file_seek(&mut file, SeekFrom::End(-24))?;
@@ -206,18 +206,18 @@ impl Dictionary {
     ) -> LaputaResult<(Self, u32)> {
         let file_type = parse_file_type(filepath)?;
         if !matches!(file_type, LapFileType::Word) {
-            return Err(LaputaError::InvalidDictName);
+            return Err("Not a word file".to_string());
         }
         let p = Path::new(filepath);
         if !p.exists() || p.is_dir() {
-            return Err(LaputaError::InvalidDictFile);
+            return Err(format!("Invalid path: {:?}", p.as_os_str()));
         }
         let word = DictFile::new(filepath, Rc::clone(&cache), cache_id)?;
         let basename = p.file_stem().unwrap().to_str().unwrap();
         let mut resources: Vec<DictFile> = Vec::new();
         let dir = match p.parent() {
             Some(d) => d,
-            None => return Err(LaputaError::InvalidDictFile),
+            None => return Err("Invalid file path".to_string()),
         };
         let res_ext = String::from(".") + EXT_RESOURCE;
         for ret in dir.read_dir().expect("Fail to read dictionary directory") {
@@ -251,7 +251,7 @@ impl Dictionary {
             if let Ok(text) = fs::read_to_string(js_file) {
                 js = text;
             } else {
-                return Err(LaputaError::InvalidJS);
+                return Err("Invald Javascript file".to_string());
             }
         }
         let mut css = String::new();
@@ -260,7 +260,7 @@ impl Dictionary {
             if let Ok(text) = fs::read_to_string(css_file) {
                 css = text;
             } else {
-                return Err(LaputaError::InvalidCSS);
+                return Err("Invalid CSS file".to_string());
             }
         }
         Ok((

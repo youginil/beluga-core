@@ -78,7 +78,7 @@ impl Bookshelf {
         None
     }
 
-    pub fn get_js_css(&self, id: u32) -> Option<(String, String)> {
+    pub fn get_static_files(&self, id: u32) -> Option<(String, String)> {
         for (i, d) in &self.dictionaries {
             if *i == id {
                 return Some((d.js.clone(), d.css.clone()));

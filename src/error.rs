@@ -1,9 +1,3 @@
-#[derive(Debug)]
-pub enum LaputaError {
-    InvalidDictName = 1,
-    InvalidDictFile = 2,
-    InvalidJS = 3,
-    InvalidCSS = 4
-}
+use std::result::Result;
 
-pub type LaputaResult<T> = std::result::Result<T, LaputaError>;
+pub type LaputaResult<T> = Result<T, String>;

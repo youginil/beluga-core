@@ -1,6 +1,5 @@
 use crate::utils::{file_read, file_seek, u32_to_u8v, u64_to_u8v, Scanner};
 use flate2::{read::DeflateDecoder, write::DeflateEncoder, Compression};
-use pbr::ProgressBar;
 use std::{
     cell::RefCell,
     cmp::Ordering,
@@ -420,7 +419,6 @@ impl<K: PartialOrd + Ord + Serializable + Clone + Display, V: Serializable> Tree
         let mut offset = file.stream_position().expect("Fail to get stream position");
         let mut leaf_offset: u64 = 0;
         let mut leaf_size: u32 = 0;
-        let mut pb = ProgressBar::new(self.node_num as u64);
         loop {
             let tmp_node_ref = node_ref.clone();
             let mut tmp_node = tmp_node_ref.borrow_mut();
@@ -455,7 +453,7 @@ impl<K: PartialOrd + Ord + Serializable + Clone + Display, V: Serializable> Tree
                 leaf_size = buf.len() as u32;
             }
             file.write(&buf).expect("Failt to write");
-            pb.inc();
+            // print!(".");
             match &tmp_node.parent {
                 Some(p) => {
                     node_ref = p.clone();
@@ -464,11 +462,11 @@ impl<K: PartialOrd + Ord + Serializable + Clone + Display, V: Serializable> Tree
             }
         }
         file.sync_all().unwrap();
-        pb.finish();
         let root_node = self.root.borrow();
         (root_node.offset, root_node.zip_size)
     }
 
+    #[allow(dead_code)]
     pub fn record_num(&self) -> usize {
         let mut size: usize = 0;
         for leaf in &self.leaves {

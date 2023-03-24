@@ -1,8 +1,6 @@
-use crate::error::{LaputaError, LaputaResult};
-use crate::raw::RawDict;
+use crate::error::{LaputaResult};
 use crate::tree::{Serializable, Tree};
 use crate::utils::*;
-use pbr::ProgressBar;
 use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
 use std::fmt::Display;
@@ -28,7 +26,7 @@ pub fn parse_file_type(file: &str) -> LaputaResult<LapFileType> {
     match ext {
         Some(EXT_WORD) => Ok(LapFileType::Word),
         Some(EXT_RESOURCE) => Ok(LapFileType::Resource),
-        _ => Err(LaputaError::InvalidDictName),
+        _ => Err("Invalid file extension".to_string()),
     }
 }
 
@@ -100,7 +98,7 @@ impl Serializable for EntryKey {
     }
 }
 
-pub struct EntryValue(Vec<u8>);
+pub struct EntryValue(pub Vec<u8>);
 
 impl Serializable for EntryValue {
     fn bytes(&self) -> Vec<u8> {
@@ -229,19 +227,10 @@ impl Laputa {
         println!("{} - {:.2}M", dest, file_size);
     }
 
-    pub fn to_raw(&self, dest: &str) {
-        if !((dest.ends_with(EXT_RAW_WORD) && self.file_type == LapFileType::Word)
-            || (dest.ends_with(EXT_RAW_RESOURCE) && self.file_type == LapFileType::Resource))
-        {
-            panic!("Invalid destination filename");
-        }
-        let mut pb = ProgressBar::new(self.entry_tree.record_num() as u64);
-        let mut raw = RawDict::new(dest);
-        self.entry_tree.traverse(|key, value| {
-            raw.insert_entry(key.0.as_str(), &value.0);
-            pb.inc();
-        });
-        raw.flush_entry_cache();
-        pb.finish();
+    pub fn traverse_entry<F>(&self, walk: &mut F)
+    where
+        F: FnMut(&EntryKey, &EntryValue),
+    {
+        self.entry_tree.traverse(walk);
     }
 }
