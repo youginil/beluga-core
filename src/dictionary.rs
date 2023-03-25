@@ -368,16 +368,21 @@ impl Dictionary {
     }
 
     #[instrument(skip(self))]
-    pub fn search(&mut self, name: &str, fuzzy_limit: usize) -> Vec<String> {
+    pub fn search(&mut self, name: &str, fuzzy_limit: usize, token_limit: usize) -> Vec<String> {
         info!("Search WORD entries");
         let mut result = self.word.search(name, fuzzy_limit);
         info!("Search TOKEN entries");
         if let Some(data) = self.word.search_entry(self.word.token_root, name) {
             let entries = Laputa::parse_token_entries(data);
             info!("Found {} entry(ies) by TOKEN", entries.len());
+            let mut token_count = 0;
             for entry_name in entries {
                 if !result.contains(&entry_name) {
+                    if token_count >= token_limit {
+                        break;
+                    }
                     result.push(entry_name);
+                    token_count += 1;
                 }
             }
         }

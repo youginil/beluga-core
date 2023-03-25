@@ -61,14 +61,20 @@ impl Bookshelf {
     }
 
     #[instrument(skip(self))]
-    pub fn search(&mut self, id: u32, word: &str, limit: usize) -> Vec<String> {
+    pub fn search(
+        &mut self,
+        id: u32,
+        word: &str,
+        fuzzy_limit: usize,
+        token_limit: usize,
+    ) -> Vec<String> {
         if word.len() == 0 {
             warn!("Empty word");
             return vec![];
         }
         for (_, d) in self.dictionaries.iter_mut().enumerate() {
             if d.0 == id {
-                return d.1.search(word, limit);
+                return d.1.search(word, fuzzy_limit, token_limit);
             }
         }
         error!("Invalid id");
