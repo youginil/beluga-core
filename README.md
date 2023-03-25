@@ -69,3 +69,4 @@ select * from word group by name having count(*) > 1;
 - `https://crates.io/crates/anyhow`, `https://crates.io/crates/thiserror`
 - Performance monitor
 - Tire tree
+- Performance: convert word-index-node-key to lowercase

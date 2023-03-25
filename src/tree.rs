@@ -3,11 +3,12 @@ use flate2::{read::DeflateDecoder, write::DeflateEncoder, Compression};
 use std::{
     cell::RefCell,
     cmp::Ordering,
-    fmt::Display,
+    fmt::{Debug, Display},
     fs::File,
     io::{Read, Seek, SeekFrom, Write},
     rc::Rc,
 };
+use tracing::{debug, info, instrument};
 
 fn compress(buf: &[u8]) -> Vec<u8> {
     let mut e = DeflateEncoder::new(Vec::new(), Compression::default());
@@ -21,12 +22,17 @@ pub trait Serializable {
     fn from_bytes(bytes: &[u8]) -> Self;
 }
 
+pub trait Smoothable {
+    fn smooth(&self) -> Self;
+}
+
 type NodeRef<K, V> = Rc<RefCell<Node<K, V>>>;
 
 fn create_node_ref<K, V>(node: Node<K, V>) -> NodeRef<K, V> {
     Rc::new(RefCell::new(node))
 }
 
+#[derive(Debug)]
 pub struct Record<K, V> {
     pub key: K,
     pub value: Option<V>,
@@ -68,6 +74,7 @@ impl<K: Serializable, V: Serializable> Record<K, V> {
     }
 }
 
+#[derive(Debug)]
 pub struct Node<K, V> {
     pub is_leaf: bool,
     pub records: Vec<Record<K, V>>,
@@ -77,7 +84,11 @@ pub struct Node<K, V> {
     zip_size: u32,
 }
 
-impl<K: PartialOrd + Ord + Serializable + Display, V: Serializable> Node<K, V> {
+impl<
+        K: PartialOrd + Ord + Serializable + Smoothable + Display + Debug + Clone,
+        V: Serializable,
+    > Node<K, V>
+{
     pub fn new(is_leaf: bool) -> Self {
         Self {
             is_leaf,
@@ -120,22 +131,45 @@ impl<K: PartialOrd + Ord + Serializable + Display, V: Serializable> Node<K, V> {
         (node, children)
     }
 
+    #[instrument(skip(self))]
     pub fn index_of(&self, key: &K) -> (usize, Ordering) {
+        info!("{} NODE", if self.is_leaf { "LEAF" } else { "INDEX" });
+        let key = key.smooth();
         let mut hi = self.records.len() - 1;
         let mut li = 0;
+        let ret: (usize, Ordering);
         loop {
             let mi = (hi + li) / 2;
-            let cr = key.cmp(&self.records[mi].key);
+            debug!(
+                "{}[{}] {}[{}] {}[{}]",
+                li, &self.records[li].key, mi, &self.records[mi].key, hi, &self.records[hi].key
+            );
+            let mi_key = &self.records[mi].key.clone();
+            let cr = if self.is_leaf {
+                key.cmp(&mi_key.smooth())
+            } else {
+                key.cmp(mi_key)
+            };
             if hi == li {
-                return (hi, cr);
+                ret = (hi, cr);
+                break;
             } else if hi - li == 1 {
                 if mi == li {
                     if cr.is_le() {
-                        return (li, cr);
+                        ret = (li, cr);
+                        break;
                     }
-                    return (hi, key.cmp(&self.records[hi].key));
+                    let hi_key = &self.records[hi].key;
+                    let cr = if self.is_leaf {
+                        key.cmp(&hi_key.smooth())
+                    } else {
+                        key.cmp(hi_key)
+                    };
+                    ret = (hi, cr);
+                    break;
                 } else {
-                    return (li, cr);
+                    ret = (li, cr);
+                    break;
                 }
             }
             if cr.is_lt() {
@@ -143,9 +177,12 @@ impl<K: PartialOrd + Ord + Serializable + Display, V: Serializable> Node<K, V> {
             } else if cr.is_gt() {
                 li = mi;
             } else {
-                return (mi, cr);
+                ret = (mi, cr);
+                break;
             }
         }
+        info!("index: {}, Ordering: {:?}", ret.0, ret.1);
+        ret
     }
 
     fn size(&self) -> usize {
@@ -215,12 +252,15 @@ impl<K: PartialOrd + Ord + Serializable + Display, V: Serializable> Node<K, V> {
     }
 }
 
-fn parse_node<K: PartialOrd + Ord + Serializable + Clone + Display, V: Serializable>(
+fn parse_node<
+    K: PartialOrd + Ord + Serializable + Smoothable + Clone + Display + Debug,
+    V: Serializable,
+>(
     file: &mut File,
     offset: u64,
     size: u32,
     leaves: &mut Vec<NodeRef<K, V>>,
-    level: usize
+    level: usize,
 ) -> (NodeRef<K, V>, usize) {
     if size == 0 {
         return (create_node_ref(Node::new(true)), 1);
@@ -243,7 +283,8 @@ fn parse_node<K: PartialOrd + Ord + Serializable + Clone + Display, V: Serializa
             if child.1 == 0 {
                 break;
             }
-            let (child_node_ref, child_node_num) = parse_node(file, child.0, child.1, leaves, level + 1);
+            let (child_node_ref, child_node_num) =
+                parse_node(file, child.0, child.1, leaves, level + 1);
             child_node_ref.borrow_mut().parent = Some(node_ref.clone());
             node_ref.borrow_mut().children.push(child_node_ref);
             node_num += child_node_num;
@@ -260,7 +301,11 @@ pub struct Tree<K, V> {
     leaf_size_limit: usize,
 }
 
-impl<K: PartialOrd + Ord + Serializable + Clone + Display, V: Serializable> Tree<K, V> {
+impl<
+        K: PartialOrd + Ord + Serializable + Smoothable + Clone + Display + Debug,
+        V: Serializable,
+    > Tree<K, V>
+{
     pub fn new(index_size_limit: usize, leaf_size_limit: usize) -> Self {
         let root = create_node_ref(Node::new(true));
         let leaf = root.clone();
@@ -331,7 +376,7 @@ impl<K: PartialOrd + Ord + Serializable + Clone + Display, V: Serializable> Tree
             let tmp_node_ref = div_node_ref.clone();
             let mut div_node = tmp_node_ref.borrow_mut();
             if div_node.is_leaf {
-                if div_node.size() > self.leaf_size_limit {
+                if div_node.records.len() > 1 && div_node.size() > self.leaf_size_limit {
                     self.node_num += 1;
                     let div_idx = div_node.records.len() / 2;
                     let right_records = div_node.records.drain(div_idx..).collect();
@@ -340,7 +385,7 @@ impl<K: PartialOrd + Ord + Serializable + Clone + Display, V: Serializable> Tree
                     let new_node_ref = create_node_ref(new_node);
                     self.leaves.push(new_node_ref.clone());
                     let mut new_node = new_node_ref.borrow_mut();
-                    let new_parent_key = new_node.records[0].key.clone();
+                    let new_parent_key = div_node.records[div_idx - 1].key.smooth();
                     if let Some(parent) = &div_node.parent {
                         let mut pnode = parent.borrow_mut();
                         new_node.parent = div_node.parent.clone();
@@ -419,6 +464,7 @@ impl<K: PartialOrd + Ord + Serializable + Clone + Display, V: Serializable> Tree
         let mut offset = file.stream_position().expect("Fail to get stream position");
         let mut leaf_offset: u64 = 0;
         let mut leaf_size: u32 = 0;
+        let mut saved_num = 0;
         loop {
             let tmp_node_ref = node_ref.clone();
             let mut tmp_node = tmp_node_ref.borrow_mut();
@@ -453,7 +499,14 @@ impl<K: PartialOrd + Ord + Serializable + Clone + Display, V: Serializable> Tree
                 leaf_size = buf.len() as u32;
             }
             file.write(&buf).expect("Failt to write");
-            // print!(".");
+            saved_num += 1;
+            print!(
+                "\r{} / {} {:.2}%",
+                saved_num,
+                self.node_num,
+                (saved_num as f64) / (self.node_num as f64) * 100.0
+            );
+            std::io::stdout().flush().unwrap();
             match &tmp_node.parent {
                 Some(p) => {
                     node_ref = p.clone();
@@ -461,6 +514,7 @@ impl<K: PartialOrd + Ord + Serializable + Clone + Display, V: Serializable> Tree
                 None => break,
             }
         }
+        print!("\n");
         file.sync_all().unwrap();
         let root_node = self.root.borrow();
         (root_node.offset, root_node.zip_size)

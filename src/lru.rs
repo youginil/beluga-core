@@ -8,6 +8,7 @@ pub trait SizedValue {
 type LruNodeRef<K, V> = Rc<RefCell<LruNode<K, V>>>;
 pub type LruValue<V> = Rc<RefCell<V>>;
 
+#[derive(Debug)]
 struct LruNode<K, V> {
     key: K,
     val: LruValue<V>,
@@ -16,6 +17,7 @@ struct LruNode<K, V> {
     next: Option<LruNodeRef<K, V>>,
 }
 
+#[derive(Debug)]
 pub struct LruCache<K, V: SizedValue> {
     cap: u64,
     len: u64,

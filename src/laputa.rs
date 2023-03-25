@@ -1,5 +1,5 @@
-use crate::error::{LaputaResult};
-use crate::tree::{Serializable, Tree};
+use crate::error::LaputaResult;
+use crate::tree::{Serializable, Tree, Smoothable};
 use crate::utils::*;
 use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
@@ -30,7 +30,7 @@ pub fn parse_file_type(file: &str) -> LaputaResult<LapFileType> {
     }
 }
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Metadata {
     pub spec: u8,
     pub version: String,
@@ -55,7 +55,7 @@ impl Metadata {
     }
 }
 
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct EntryKey(pub String);
 
 impl Display for EntryKey {
@@ -66,19 +66,19 @@ impl Display for EntryKey {
 
 impl PartialOrd for EntryKey {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        self.0.to_lowercase().partial_cmp(&other.0.to_lowercase())
+        self.0.partial_cmp(&other.0)
     }
 }
 
 impl Ord for EntryKey {
     fn cmp(&self, other: &Self) -> Ordering {
-        self.0.to_lowercase().cmp(&other.0.to_lowercase())
+        self.0.cmp(&other.0)
     }
 }
 
 impl PartialEq for EntryKey {
     fn eq(&self, other: &Self) -> bool {
-        self.0.to_lowercase() == other.0.to_lowercase()
+        self.0 == other.0
     }
 }
 
@@ -98,6 +98,13 @@ impl Serializable for EntryKey {
     }
 }
 
+impl Smoothable for EntryKey {
+    fn smooth(&self) -> Self {
+        EntryKey(self.0.to_lowercase())
+    }
+} 
+
+#[derive(Debug)]
 pub struct EntryValue(pub Vec<u8>);
 
 impl Serializable for EntryValue {
@@ -214,10 +221,10 @@ impl Laputa {
             .expect("Fail to write file");
         file.write_all(metadata_bytes).expect("Fail to write");
         // entry tree
-        println!("Writing entries...");
+        println!("Writing entry nodes...");
         let (entry_root_offset, entry_root_size) = self.entry_tree.write_to(&mut file);
         // token tree
-        println!("Writing tokens...");
+        println!("Writing token nodes...");
         let (token_root_offset, token_root_size) = self.token_tree.write_to(&mut file);
         file.write_all(&u64_to_u8v(entry_root_offset)).unwrap();
         file.write_all(&u32_to_u8v(entry_root_size)).unwrap();
