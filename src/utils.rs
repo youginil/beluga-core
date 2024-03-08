@@ -1,9 +1,8 @@
+use crate::error::{Error, Result};
 use std::{
     fs::File,
     io::{Read, Seek, SeekFrom},
 };
-
-use crate::error::LaputaResult;
 
 pub fn u8v_to_u64(v: &[u8]) -> u64 {
     if v.len() != 8 {
@@ -120,28 +119,22 @@ impl Scanner {
     }
 }
 
-pub fn file_read(file: &mut File, n: usize) -> LaputaResult<Vec<u8>> {
+pub fn file_read(file: &mut File, n: usize) -> Result<Vec<u8>> {
     let mut buf: Vec<u8> = vec![0; n];
-    if let Ok(size) = file.read(&mut buf) {
-        if size != buf.len() {
-            return Err("Fail to read file".to_string());
-        }
-    } else {
-        return Err("Fail to read file".to_string());
-    }
+    file.read_exact(&mut buf)?;
     Ok(buf)
 }
 
-pub fn file_seek(file: &mut File, pos: SeekFrom) -> LaputaResult<()> {
+pub fn file_seek(file: &mut File, pos: SeekFrom) -> Result<()> {
     if let Err(_) = file.seek(pos) {
-        return Err("Fail to seek file".to_string());
+        return Err(Error::Msg("fail to seek file".to_string()));
     }
     Ok(())
 }
 
-pub fn file_open(filepath: &str) -> LaputaResult<File> {
+pub fn file_open(filepath: &str) -> Result<File> {
     match File::open(filepath) {
         Ok(r) => Ok(r),
-        Err(_) => Err("Fail to open file".to_string()),
+        Err(_) => Err(Error::Msg("Fail to open file".to_string())),
     }
 }

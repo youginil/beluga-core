@@ -1,5 +1,5 @@
-use crate::error::LaputaResult;
-use crate::tree::{Serializable, Tree, Smoothable};
+use crate::error::{Error, Result};
+use crate::tree::{Serializable, Smoothable, Tree};
 use crate::utils::*;
 use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
@@ -21,12 +21,12 @@ pub enum LapFileType {
     Resource,
 }
 
-pub fn parse_file_type(file: &str) -> LaputaResult<LapFileType> {
+pub fn parse_file_type(file: &str) -> Result<LapFileType> {
     let ext = file.split(".").last();
     match ext {
         Some(EXT_WORD) => Ok(LapFileType::Word),
         Some(EXT_RESOURCE) => Ok(LapFileType::Resource),
-        _ => Err("Invalid file extension".to_string()),
+        _ => Err(Error::Msg("Invalid file extension".to_string())),
     }
 }
 
@@ -102,9 +102,9 @@ impl Smoothable for EntryKey {
     fn smooth(&self) -> Self {
         EntryKey(self.0.to_lowercase())
     }
-} 
+}
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct EntryValue(pub Vec<u8>);
 
 impl Serializable for EntryValue {
@@ -121,14 +121,14 @@ impl Serializable for EntryValue {
     }
 }
 
-pub struct Laputa {
+pub struct Beluga {
     pub metadata: Metadata,
     pub file_type: LapFileType,
     entry_tree: Tree<EntryKey, EntryValue>,
     token_tree: Tree<EntryKey, EntryValue>,
 }
 
-impl Laputa {
+impl Beluga {
     pub fn new(metadata: Metadata, file_type: LapFileType) -> Self {
         Self {
             metadata,
@@ -138,9 +138,9 @@ impl Laputa {
         }
     }
 
-    pub fn from_file(filepath: &str) -> Self {
+    pub async fn from_file(filepath: &str) -> Self {
         let ext = parse_file_type(filepath).unwrap();
-        let mut file = File::open(filepath).unwrap();
+        let mut file = file_open(filepath).unwrap();
         let mut buf = file_read(&mut file, 4).unwrap();
         let metadata_length = u8v_to_u32(&buf[..]) as usize;
         buf = file_read(&mut file, metadata_length).unwrap();
@@ -204,7 +204,7 @@ impl Laputa {
         result
     }
 
-    pub fn save(&mut self, dest: &str) {
+    pub async fn save(&mut self, dest: &str) {
         println!("Writing to {}...", dest);
         let file_path = Path::new(dest);
         if file_path.exists() {

@@ -1,7 +1,6 @@
-mod utils;
-mod lru;
-mod tree;
-mod dictionary;
+pub mod beluga;
+pub mod dictionary;
 pub mod error;
-pub mod laputa;
-pub mod bookshelf;
+pub mod lru;
+pub mod tree;
+mod utils;

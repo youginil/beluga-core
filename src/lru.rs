@@ -1,96 +1,99 @@
 use core::hash::Hash;
-use std::{cell::RefCell, collections::HashMap, rc::Rc};
+use std::{collections::HashMap, ptr::NonNull};
 
 pub trait SizedValue {
     fn size(&self) -> u64;
 }
 
-type LruNodeRef<K, V> = Rc<RefCell<LruNode<K, V>>>;
-pub type LruValue<V> = Rc<RefCell<V>>;
-
 #[derive(Debug)]
-struct LruNode<K, V> {
+struct LruNode<K, V: Clone> {
     key: K,
-    val: LruValue<V>,
+    val: V,
     size: u64,
-    prev: Option<LruNodeRef<K, V>>,
-    next: Option<LruNodeRef<K, V>>,
+    prev: Option<NonNull<LruNode<K, V>>>,
+    next: Option<NonNull<LruNode<K, V>>>,
 }
 
 #[derive(Debug)]
-pub struct LruCache<K, V: SizedValue> {
+pub struct LruCache<K, V: SizedValue + Clone> {
     cap: u64,
     len: u64,
-    map: HashMap<K, LruNodeRef<K, V>>,
-    head: Option<LruNodeRef<K, V>>,
-    tail: Option<LruNodeRef<K, V>>,
+    map: NonNull<HashMap<K, NonNull<LruNode<K, V>>>>,
+    head: Option<NonNull<LruNode<K, V>>>,
+    tail: Option<NonNull<LruNode<K, V>>>,
 }
 
-impl<K: Hash + Eq + Copy, V: SizedValue> LruCache<K, V> {
+unsafe impl<K, V: SizedValue + Clone + Send> Send for LruCache<K, V> {}
+unsafe impl<K, V: SizedValue + Clone + Sync> Sync for LruCache<K, V> {}
+
+impl<K: Hash + Eq + Copy, V: SizedValue + Clone> LruCache<K, V> {
     pub fn new(cap: u64) -> Self {
+        let map = Box::new(HashMap::new());
+        let map_ptr = NonNull::from(Box::leak(map));
         Self {
             cap,
             len: 0,
-            map: HashMap::new(),
+            map: map_ptr,
             head: None,
             tail: None,
         }
     }
-    pub fn put(&mut self, key: K, val: V) -> LruValue<V> {
-        match self.map.get_mut(&key) {
-            Some(value) => {
-                let mut v = value.borrow_mut();
-                v.val = Rc::new(RefCell::new(val));
-                match &v.next {
-                    Some(n) => {
-                        if let Some(p) = &v.prev {
-                            p.borrow_mut().next = Some(Rc::clone(&n));
-                            n.borrow_mut().prev = Some(Rc::clone(&p));
-                            v.prev = None;
-                            v.next = self.head.clone();
-                            self.head = Some(Rc::clone(value));
+
+    pub fn put(&mut self, key: K, val: V) -> V {
+        match unsafe { self.map.as_mut().get_mut(&key) } {
+            Some(v) => {
+                let node = unsafe { v.as_mut() };
+                node.val = val;
+                match node.next {
+                    Some(mut n) => {
+                        if let Some(mut p) = node.prev {
+                            unsafe { p.as_mut().next = Some(n) };
+                            unsafe { n.as_mut().prev = Some(p) };
+                            node.prev = None;
+                            node.next = self.head;
+                            self.head = Some(*v);
                         }
                     }
                     None => {
-                        if let Some(p) = &v.prev {
-                            p.borrow_mut().next = None;
-                            value.borrow_mut().next = self.head.clone();
-                            self.head = Some(Rc::clone(value));
-                            self.tail = Some(Rc::clone(&p));
+                        if let Some(mut p) = node.prev {
+                            unsafe { p.as_mut().next = None };
+                            node.next = self.head;
+                            self.head = Some(*v);
+                            self.tail = Some(p);
                         }
                     }
                 }
             }
             None => {
                 let size = val.size();
-                let v = LruNode {
+                let node = Box::new(LruNode {
                     key,
-                    val: Rc::new(RefCell::new(val)),
+                    val,
                     size,
                     prev: None,
-                    next: self.head.clone(),
-                };
-                let value = Rc::new(RefCell::new(v));
-                match &self.head {
-                    Some(h) => {
-                        h.borrow_mut().prev = Some(Rc::clone(&value));
-                        value.borrow_mut().next = Some(Rc::clone(&h));
+                    next: self.head,
+                });
+                let mut node_ptr = NonNull::from(Box::leak(node));
+                match self.head {
+                    Some(mut h) => {
+                        unsafe { h.as_mut().prev = Some(node_ptr) };
+                        unsafe { node_ptr.as_mut().next = Some(h) };
                     }
                     None => {
-                        self.tail = Some(Rc::clone(&value));
+                        self.tail = Some(node_ptr);
                     }
                 }
-                self.head = Some(Rc::clone(&value));
-                self.map.insert(key, Rc::clone(&value));
+                self.head = Some(node_ptr);
+                unsafe { self.map.as_mut().insert(key, node_ptr) };
             }
         }
         self.shrink();
-        self.head.as_mut().unwrap().borrow().val.clone()
+        unsafe { self.head.unwrap().as_ref().val.clone() }
     }
 
-    pub fn get(&self, key: &K) -> Option<LruValue<V>> {
-        match self.map.get(key) {
-            Some(v) => Some(v.borrow().val.clone()),
+    pub fn get(&self, key: &K) -> Option<V> {
+        match unsafe { self.map.as_ref().get(key) } {
+            Some(v) => Some(unsafe { v.as_ref().val.clone() }),
             None => None,
         }
     }
@@ -102,12 +105,12 @@ impl<K: Hash + Eq + Copy, V: SizedValue> LruCache<K, V> {
 
     fn shrink(&mut self) {
         while self.len > self.cap {
-            if let Some(v) = &self.tail {
-                let tail = Rc::clone(v);
-                let key = tail.borrow().key;
-                self.map.remove(&key);
-                self.tail = tail.borrow().prev.clone();
-                self.len -= tail.borrow().size;
+            if let Some(mut tail) = self.tail {
+                let tail_node = unsafe { tail.as_mut() };
+                let key = tail_node.key;
+                unsafe { self.map.as_mut().remove(&key) };
+                self.tail = tail_node.prev;
+                self.len -= tail_node.size;
             } else {
                 break;
             }

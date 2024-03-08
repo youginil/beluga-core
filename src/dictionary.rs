@@ -1,25 +1,25 @@
+use crate::error::{Error, Result};
 use flate2::read::DeflateDecoder;
+use tokio::sync::RwLock;
 use tracing::{error, info, instrument, warn};
 
 use crate::{
-    error::LaputaResult,
-    laputa::{parse_file_type, EntryKey, EntryValue, LapFileType, Laputa, Metadata, EXT_RESOURCE},
-    lru::{LruCache, LruValue, SizedValue},
+    beluga::{parse_file_type, Beluga, EntryKey, EntryValue, LapFileType, Metadata, EXT_RESOURCE},
+    lru::{LruCache, SizedValue},
     tree::{Node, Serializable},
     utils::{file_open, file_read, file_seek, u8v_to_u32, Scanner},
 };
 use std::{
-    cell::RefCell,
     fs::{self, File},
     io::{Read, SeekFrom},
     path::Path,
-    rc::Rc,
+    sync::Arc,
 };
 
 type EntryNode = Node<EntryKey, EntryValue>;
-pub type LruCacheRef = Rc<RefCell<LruCache<(u32, u64), DictNode>>>;
+pub type NodeCache = LruCache<(u32, u64), DictNode>;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct DictNode {
     node: EntryNode,
     children: Vec<(u64, u32)>,
@@ -50,12 +50,10 @@ struct DictFile {
     entry_root: (u64, u32),
     token_root: (u64, u32),
     cache_id: u32,
-    cache: LruCacheRef,
 }
 
 impl DictFile {
-    #[instrument(name = "DictFile::new", skip(cache))]
-    fn new(filepath: &str, cache: LruCacheRef, cache_id: u32) -> LaputaResult<Self> {
+    fn new(filepath: &str, cache_id: u32) -> Result<Self> {
         let mut file = file_open(filepath)?;
         let mut buf = file_read(&mut file, 4)?;
         let metadata_length = u8v_to_u32(&buf[..]);
@@ -65,7 +63,7 @@ impl DictFile {
             Ok(r) => r,
             Err(_) => {
                 error!("Fail to parse metadata");
-                return Err("Fail to parse metadata".to_string());
+                return Err(Error::Msg("fail to parse metadata".to_string()));
             }
         };
         file_seek(&mut file, SeekFrom::End(-24))?;
@@ -86,16 +84,22 @@ impl DictFile {
             entry_root: (entry_root_offset, entry_root_size),
             token_root: (token_root_offset, token_root_size),
             cache_id,
-            cache,
         })
     }
 
-    #[instrument(skip(self))]
-    fn get_node(&mut self, offset: u64, size: u32) -> Option<LruValue<DictNode>> {
-        if let Some(node) = self.cache.borrow().get(&(self.cache_id, offset)) {
+    #[instrument(skip(self, cache))]
+    async fn get_node(
+        &mut self,
+        cache: Arc<RwLock<NodeCache>>,
+        offset: u64,
+        size: u32,
+    ) -> Option<DictNode> {
+        let cache_lock = cache.read().await;
+        if let Some(node) = cache_lock.get(&(self.cache_id, offset)) {
             info!("Found in cache");
             return Some(node);
         }
+        drop(cache_lock);
         if let Err(e) = file_seek(&mut self.file, SeekFrom::Start(offset)) {
             error!("File Seeking error. {}", e);
             return None;
@@ -106,9 +110,11 @@ impl DictFile {
                 let mut data: Vec<u8> = vec![];
                 decode.read_to_end(&mut data).unwrap();
                 let (node, children) = Node::<EntryKey, EntryValue>::from_bytes(data);
-                let mut dnode = DictNode::new(node);
+                let mut dnode = DictNode::new(*node);
                 dnode.children = children;
-                let value = self.cache.borrow_mut().put((self.cache_id, offset), dnode);
+                let mut cache_lock = cache.write().await;
+                let value = cache_lock.put((self.cache_id, offset), dnode);
+                drop(cache_lock);
                 Some(value)
             }
             Err(e) => {
@@ -118,21 +124,26 @@ impl DictFile {
         }
     }
 
-    #[instrument(skip(self))]
-    pub fn search(&mut self, name: &str, fuzzy_limit: usize) -> Vec<String> {
+    #[instrument(skip(self, cache))]
+    pub async fn search(
+        &mut self,
+        cache: Arc<RwLock<NodeCache>>,
+        name: &str,
+        fuzzy_limit: usize,
+    ) -> Vec<String> {
         let mut result: Vec<String> = Vec::new();
         let mut offset = self.entry_root.0;
         let mut size = self.entry_root.1;
-        let lower_name = name.clone().to_lowercase();
+        let lower_name = name.to_lowercase();
         loop {
-            let dict_node = match self.get_node(offset, size) {
+            let dict_node = match self.get_node(cache.clone(), offset, size).await {
                 Some(nd) => nd,
                 None => {
                     error!("Node not exists: offset: {}, size: {}", offset, size);
                     return result;
                 }
             };
-            let dn = dict_node.borrow();
+            let dn = dict_node;
             let node = &dn.node;
             let key = EntryKey(name.to_string());
             let (wi, cr) = dn.node.index_of(&key);
@@ -160,8 +171,7 @@ impl DictFile {
                         info!("No next sibling");
                         return result;
                     }
-                    if let Some(dict_node) = self.get_node(next_offset, next_size) {
-                        let dn = dict_node.borrow();
+                    if let Some(dn) = self.get_node(cache.clone(), next_offset, next_size).await {
                         for rec in &dn.node.records {
                             let k = &rec.key.0;
                             info!("Checking match: {}", k);
@@ -191,20 +201,24 @@ impl DictFile {
         }
     }
 
-    #[instrument(skip(self))]
-    pub fn search_entry(&mut self, root: (u64, u32), name: &str) -> Option<Vec<u8>> {
+    #[instrument(skip(self, cache))]
+    pub async fn search_entry(
+        &mut self,
+        cache: Arc<RwLock<NodeCache>>,
+        root: (u64, u32),
+        name: &str,
+    ) -> Option<Vec<u8>> {
         let mut offset = root.0;
         let mut size = root.1;
         loop {
-            let dict_node = match self.get_node(offset, size) {
+            let dict_node = match self.get_node(cache.clone(), offset, size).await {
                 Some(nd) => nd,
                 None => {
                     error!("Node not exists. offset: {}, size: {}", offset, size);
                     return None;
                 }
             };
-            let dn = dict_node.borrow();
-            let node = &dn.node;
+            let node = dict_node.node;
             let key = EntryKey(name.to_string());
             let (index, cr) = node.index_of(&key);
             if node.is_leaf {
@@ -218,15 +232,17 @@ impl DictFile {
                             return Some(rec.value.as_ref().unwrap().bytes());
                         }
                     }
-                    let mut next_offset = dn.children[0].0;
-                    let mut next_size = dn.children[0].1;
+                    let mut next_offset = dict_node.children[0].0;
+                    let mut next_size = dict_node.children[0].1;
                     loop {
                         if next_offset == 0 {
                             return None;
                         }
-                        if let Some(dict_node) = self.get_node(next_offset, next_size) {
-                            let dn = dict_node.borrow();
-                            for rec in &dn.node.records {
+                        if let Some(dict_node) =
+                            self.get_node(cache.clone(), next_offset, next_size).await
+                        {
+                            let node = dict_node.node;
+                            for rec in &node.records {
                                 let k = &rec.key.0;
                                 info!("Checking match: {}", k);
                                 if k == name {
@@ -236,8 +252,8 @@ impl DictFile {
                                     return None;
                                 }
                             }
-                            next_offset = dn.children[0].0;
-                            next_size = dn.children[0].1;
+                            next_offset = dict_node.children[0].0;
+                            next_size = dict_node.children[0].1;
                         } else {
                             return None;
                         }
@@ -245,14 +261,13 @@ impl DictFile {
                 }
                 warn!("Entry not exists");
                 return None;
-            } else {
-                info!("Node is INDEX");
-                (offset, size) = if cr.is_le() {
-                    dn.children[index]
-                } else {
-                    dn.children[index + 1]
-                };
             }
+            info!("Node is INDEX");
+            (offset, size) = if cr.is_le() {
+                dict_node.children[index]
+            } else {
+                dict_node.children[index + 1]
+            };
         }
     }
 }
@@ -265,31 +280,26 @@ pub struct Dictionary {
 }
 
 impl Dictionary {
-    #[instrument(name = "Dictionary::new", skip(cache))]
-    pub fn new(
-        filepath: &str,
-        cache: &LruCacheRef,
-        mut cache_id: u32,
-    ) -> LaputaResult<(Self, u32)> {
+    pub fn new(filepath: &str, mut cache_id: u32) -> Result<(Self, u32)> {
         let file_type = parse_file_type(filepath)?;
         if !matches!(file_type, LapFileType::Word) {
             error!("Invalid WORD extension");
-            return Err("Not a word file".to_string());
+            return Err(Error::Msg("not a word file".to_string()));
         }
         let p = Path::new(filepath);
         if !p.exists() || p.is_dir() {
             error!("File not exists or it is a directory");
-            return Err(format!("Invalid path: {:?}", p.as_os_str()));
+            return Err(Error::Msg(format!("invalid path. {:?}", p)));
         }
         info!("Load WORD file");
-        let word = DictFile::new(filepath, Rc::clone(&cache), cache_id)?;
+        let word = DictFile::new(filepath, cache_id)?;
         let basename = p.file_stem().unwrap().to_str().unwrap();
         let mut resources: Vec<DictFile> = Vec::new();
         let dir = match p.parent() {
             Some(d) => d,
             None => {
                 error!("File has no parent directory, weird???");
-                return Err("Invalid file path".to_string());
+                return Err(Error::Msg("invalid file path".to_string()));
             }
         };
         let res_ext = String::from(".") + EXT_RESOURCE;
@@ -316,11 +326,8 @@ impl Dictionary {
                         if is_res {
                             cache_id += 1;
                             info!("Load resource file. {}", name);
-                            let mut res = DictFile::new(
-                                dir.join(&name).to_str().unwrap(),
-                                Rc::clone(&cache),
-                                cache_id,
-                            )?;
+                            let mut res =
+                                DictFile::new(dir.join(&name).to_str().unwrap(), cache_id)?;
                             res.id = String::from(res_id);
                             resources.push(res);
                         }
@@ -336,7 +343,7 @@ impl Dictionary {
                 Ok(text) => js = text,
                 Err(e) => {
                     error!("Fail to read file. {}", e);
-                    return Err("Invald Javascript file".to_string());
+                    return Err(Error::Msg("invalid javascript file".to_string()));
                 }
             }
         }
@@ -348,7 +355,7 @@ impl Dictionary {
                 Ok(text) => css = text,
                 Err(e) => {
                     error!("Fail to read file. {}", e);
-                    return Err("Invalid CSS file".to_string());
+                    return Err(Error::Msg("invalid css file".to_string()));
                 }
             }
         }
@@ -367,18 +374,28 @@ impl Dictionary {
         self.word.metadata.clone()
     }
 
-    #[instrument(skip(self))]
-    pub fn search(&mut self, name: &str, fuzzy_limit: usize, token_limit: usize) -> Vec<String> {
+    #[instrument(skip(self, cache))]
+    pub async fn search(
+        &mut self,
+        cache: Arc<RwLock<NodeCache>>,
+        name: &str,
+        fuzzy_limit: usize,
+        result_limit: usize,
+    ) -> Vec<String> {
         info!("Search WORD entries");
-        let mut result = self.word.search(name, fuzzy_limit);
+        let mut result = self.word.search(cache.clone(), name, fuzzy_limit).await;
         info!("Search TOKEN entries");
-        if let Some(data) = self.word.search_entry(self.word.token_root, name) {
-            let entries = Laputa::parse_token_entries(data);
+        if let Some(data) = self
+            .word
+            .search_entry(cache.clone(), self.word.token_root, name)
+            .await
+        {
+            let entries = Beluga::parse_token_entries(data);
             info!("Found {} entry(ies) by TOKEN", entries.len());
             let mut token_count = 0;
             for entry_name in entries {
                 if !result.contains(&entry_name) {
-                    if token_count >= token_limit {
+                    if token_count >= result_limit {
                         break;
                     }
                     result.push(entry_name);
@@ -389,9 +406,17 @@ impl Dictionary {
         result
     }
 
-    #[instrument(skip(self))]
-    pub fn search_word(&mut self, name: &str) -> Option<String> {
-        if let Some(data) = self.word.search_entry(self.word.entry_root, name) {
+    #[instrument(skip(self, cache))]
+    pub async fn search_word(
+        &mut self,
+        cache: Arc<RwLock<NodeCache>>,
+        name: &str,
+    ) -> Option<String> {
+        if let Some(data) = self
+            .word
+            .search_entry(cache.clone(), self.word.entry_root, name)
+            .await
+        {
             if let Ok(s) = String::from_utf8(data) {
                 return Some(s);
             }
@@ -399,8 +424,12 @@ impl Dictionary {
         None
     }
 
-    #[instrument(skip(self))]
-    pub fn search_resource(&mut self, name: &str) -> Option<Vec<u8>> {
+    #[instrument(skip(self, cache))]
+    pub async fn search_resource(
+        &mut self,
+        cache: Arc<RwLock<NodeCache>>,
+        name: &str,
+    ) -> Option<Vec<u8>> {
         let (id, n) = match name.split_once("//") {
             Some(r) => r,
             None => ("", name),
@@ -408,7 +437,7 @@ impl Dictionary {
         info!("Resource ID: {}, name: {}", id, n);
         for (_, dict) in self.resources.iter_mut().enumerate() {
             if dict.id == id {
-                return dict.search_entry(dict.entry_root, n);
+                return dict.search_entry(cache.clone(), dict.entry_root, n).await;
             }
         }
         info!("Invalid resource ID");

@@ -1,6 +1,6 @@
-# laputa-core
+# beluga-core
 
-## Laputa
+## Beluga
 #### Dictionary
 Title            | Structure
 -----------------|-------------
