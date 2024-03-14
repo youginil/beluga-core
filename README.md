@@ -1,44 +1,53 @@
 # beluga-core
 
 ## Beluga
+
 #### Dictionary
-Title            | Structure
------------------|-------------
-Metadata length  | (4B)
-Metadata         | {spec: u8, version: String, word_num: u64, author: String, email: String, create_time: String, comment: String}
-Nodes            | (node compressed by Deflate)...
-Root Node        | (root offset 8B) (root size 4B)
+
+| Title           | Structure                                                                                                       |
+| --------------- | --------------------------------------------------------------------------------------------------------------- |
+| Metadata length | (4B)                                                                                                            |
+| Metadata        | {spec: u8, version: String, word_num: u64, author: String, email: String, create_time: String, comment: String} |
+| Nodes           | (node compressed by Deflate)...                                                                                 |
+| Root Node       | (root offset 8B) (root size 4B)                                                                                 |
 
 #### Node
-Title          | Structure
----------------|-----------------
-is leaf        | (1B) 0 - leaf; other - !leaf
-Word count     | (4B)
-Words          | (key length 4B)(key) (leaf ? (value length 4B)(value) : None)...
-Children       | !leaf : (child offset 8B)(child length 4B)...<br> leaf: (next sibling offset 8B)(next sibling length 4B)...<br>Offset of the last leaf node' child is 0
+
+| Title      | Structure                                                                                                                                               |
+| ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| is leaf    | (1B) 0 - leaf; other - !leaf                                                                                                                            |
+| Word count | (4B)                                                                                                                                                    |
+| Words      | (key length 4B)(key) (leaf ? (value length 4B)(value) : None)...                                                                                        |
+| Children   | !leaf : (child offset 8B)(child length 4B)...<br> leaf: (next sibling offset 8B)(next sibling length 4B)...<br>Offset of the last leaf node' child is 0 |
 
 ## Raw
+
 #### Fields
-Name     | Type
------------------------
-id       | INTEGER
-name     | TEXT
-text     | TEXT
-binary   | BLOB
+
+## Name | Type
+
+id | INTEGER
+name | TEXT
+text | TEXT
+binary | BLOB
 
 #### SQL
+
 ```
 select * from word group by name having count(*) > 1;
 ```
 
 ## References
+
 #### Mdict
+
 - https://github.com/csarron/mdict-analysis
 - https://github.com/zhansliu/writemdict/blob/master/fileformat.md
 - https://github.com/fengdh/mdict-js
 - https://github.com/ilius/pyglossary
 
 #### Fulltext Index
+
 - https://github.com/stanfordnlp/CoreNLP
 - https://github.com/hankcs/HanLP
 - https://github.com/nltk/nltk
@@ -52,6 +61,7 @@ select * from word group by name having count(*) > 1;
 - https://github.com/NLPchina/ansj_seg
 
 #### Dictionary Online
+
 - https://www.thesaurus.com/
 - https://www.dictionary.com/
 - https://dictionary.cambridge.org/
@@ -61,13 +71,12 @@ select * from word group by name having count(*) > 1;
 - https://www.oxfordlearnersdictionaries.com/
 
 ## TODO
+
 - Checksum
 - Remove special chars and set @@@LINK=
 - HTML validation, fix, prettify. `tidy-html5`, `cheerio`
 - Convert resource id to `<a href="audio://a/b/c.mp3">`, `<img data-src="a/b/c.jpg">`
 - Capture. `puppeteer`
-- `https://crates.io/crates/anyhow`, `https://crates.io/crates/thiserror`
 - Performance monitor
 - Tire tree
-- "assist in" Merge(Result<assist>, Result<in>) 
-- Multi threads support
+- "assist in" Merge(Result<assist>, Result<in>)
