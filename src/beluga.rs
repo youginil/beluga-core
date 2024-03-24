@@ -12,8 +12,8 @@ const LEAF_NODE_SIZE: usize = 64 * 1024;
 const INDEX_NODE_SIZE: usize = 64 * 1024;
 pub const EXT_WORD: &str = "bel";
 pub const EXT_RESOURCE: &str = "beld";
-pub const EXT_RAW_WORD: &str = "bel.db";
-pub const EXT_RAW_RESOURCE: &str = "beld.db";
+pub const EXT_RAW_WORD: &str = "bel-db";
+pub const EXT_RAW_RESOURCE: &str = "beld-db";
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum LapFileType {
