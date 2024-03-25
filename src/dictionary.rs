@@ -149,18 +149,17 @@ impl DictFile {
             let (wi, cr) = dn.node.index_of(&key);
             if node.is_leaf {
                 info!("Node is LEAF");
-                if cr.is_ge() {
-                    for i in wi..node.records.len() {
-                        let k = &node.records[i].key;
-                        info!("Checking match: {}", k,);
-                        if k.0.to_lowercase().starts_with(lower_name.as_str()) {
-                            result.push(k.0.clone());
-                        } else {
-                            return result;
-                        }
-                        if result.len() >= fuzzy_limit {
-                            return result;
-                        }
+                let idx = if cr.is_le() { wi } else { wi + 1 };
+                for i in idx..node.records.len() {
+                    let k = &node.records[i].key;
+                    info!("Checking match: {}", k,);
+                    if k.0.to_lowercase().starts_with(lower_name.as_str()) {
+                        result.push(k.0.clone());
+                    } else {
+                        return result;
+                    }
+                    if result.len() >= fuzzy_limit {
+                        return result;
                     }
                 }
                 let mut next_offset = dn.children[0].0;
