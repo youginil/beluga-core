@@ -429,14 +429,13 @@ impl Dictionary {
         cache: Arc<RwLock<NodeCache>>,
         name: &str,
     ) -> Option<Vec<u8>> {
-        let (id, n) = match name.split_once("//") {
-            Some(r) => r,
-            None => ("", name),
-        };
-        info!("Resource ID: {}, name: {}", id, n);
+        info!("Resource name: {}", name);
         for (_, dict) in self.resources.iter_mut().enumerate() {
-            if dict.id == id {
-                return dict.search_entry(cache.clone(), dict.entry_root, n).await;
+            if let Some(v) = dict
+                .search_entry(cache.clone(), dict.entry_root, name)
+                .await
+            {
+                return Some(v);
             }
         }
         info!("Invalid resource ID");
