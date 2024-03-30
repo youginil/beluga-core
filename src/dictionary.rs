@@ -398,22 +398,24 @@ impl Dictionary {
     ) -> Vec<String> {
         info!("Search WORD entries");
         let mut result = self.word.search(cache.clone(), name, fuzzy_limit).await;
-        info!("Search TOKEN entries");
-        if let Some(data) = self
-            .word
-            .search_entry(cache.clone(), self.word.token_root, name)
-            .await
-        {
-            let entries = Beluga::parse_token_entries(data);
-            info!("Found {} entry(ies) by TOKEN", entries.len());
-            let mut token_count = 0;
-            for entry_name in entries {
-                if !result.contains(&entry_name) {
-                    if token_count >= result_limit {
-                        break;
+        if self.word.token_root.1 != 0 {
+            info!("Search TOKEN entries");
+            if let Some(data) = self
+                .word
+                .search_entry(cache.clone(), self.word.token_root, name)
+                .await
+            {
+                let entries = Beluga::parse_token_entries(data);
+                info!("Found {} entry(ies) by TOKEN", entries.len());
+                let mut token_count = 0;
+                for entry_name in entries {
+                    if !result.contains(&entry_name) {
+                        if token_count >= result_limit {
+                            break;
+                        }
+                        result.push(entry_name);
+                        token_count += 1;
                     }
-                    result.push(entry_name);
-                    token_count += 1;
                 }
             }
         }
