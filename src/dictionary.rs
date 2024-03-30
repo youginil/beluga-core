@@ -434,12 +434,13 @@ impl Dictionary {
                 .search_entry(cache.clone(), self.word.entry_root, &keyword)
                 .await
             {
-                if let Ok(s) = String::from_utf8(data) {
+                if let Ok(content) = String::from_utf8(data) {
+                    let s = content.trim();
                     if s.starts_with(REDIRECT) {
                         let (_, kw) = s.split_at(REDIRECT.len());
                         keyword = kw.to_string();
                     } else {
-                        return Some(s);
+                        return Some(content);
                     }
                 }
             }
