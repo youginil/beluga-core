@@ -16,6 +16,8 @@ use std::{
     sync::Arc,
 };
 
+static REDIRECT: &str = "@@@LINK=";
+
 type EntryNode = Node<EntryKey, EntryValue>;
 pub type NodeCache = LruCache<(u32, u64), DictNode>;
 
@@ -272,10 +274,11 @@ impl DictFile {
 }
 
 pub struct Dictionary {
+    dir: String,
+    basename: String,
     word: DictFile,
     resources: Vec<DictFile>,
-    pub js: String,
-    pub css: String,
+    css_js: Option<(String, String)>,
 }
 
 impl Dictionary {
@@ -334,8 +337,25 @@ impl Dictionary {
                 }
             }
         }
+        Ok((
+            Self {
+                dir: dir.to_str().unwrap().to_string(),
+                basename: basename.to_string(),
+                word,
+                resources,
+                css_js: None,
+            },
+            cache_id,
+        ))
+    }
+
+    pub fn get_css_js(&mut self) -> Result<(String, String)> {
+        if let Some(v) = &self.css_js {
+            return Ok(v.clone());
+        }
+        let dir = Path::new(&self.dir);
         let mut js = String::new();
-        let js_file = dir.join(String::from(basename) + ".js");
+        let js_file = dir.join(format!("{}.js", self.basename));
         if js_file.is_file() {
             info!("Load JavaScript file. {:?}", js_file);
             match fs::read_to_string(js_file) {
@@ -347,7 +367,7 @@ impl Dictionary {
             }
         }
         let mut css = String::new();
-        let css_file = dir.join(String::from(basename) + ".css");
+        let css_file = dir.join(format!("{}.css", self.basename));
         if css_file.is_file() {
             info!("Load CSS file. {:?}", css_file);
             match fs::read_to_string(css_file) {
@@ -358,15 +378,10 @@ impl Dictionary {
                 }
             }
         }
-        Ok((
-            Self {
-                word,
-                resources,
-                js,
-                css,
-            },
-            cache_id,
-        ))
+        if !cfg!(debug_assertions) {
+            self.css_js = Some((css.clone(), js.clone()));
+        }
+        Ok((css, js))
     }
 
     pub fn metadata(&self) -> Metadata {
@@ -411,13 +426,22 @@ impl Dictionary {
         cache: Arc<RwLock<NodeCache>>,
         name: &str,
     ) -> Option<String> {
-        if let Some(data) = self
-            .word
-            .search_entry(cache.clone(), self.word.entry_root, name)
-            .await
-        {
-            if let Ok(s) = String::from_utf8(data) {
-                return Some(s);
+        let max_redirects = 3;
+        let mut keyword = name.to_string();
+        for _ in 0..max_redirects {
+            if let Some(data) = self
+                .word
+                .search_entry(cache.clone(), self.word.entry_root, &keyword)
+                .await
+            {
+                if let Ok(s) = String::from_utf8(data) {
+                    if s.starts_with(REDIRECT) {
+                        let (_, kw) = s.split_at(REDIRECT.len());
+                        keyword = kw.to_string();
+                    } else {
+                        return Some(s);
+                    }
+                }
             }
         }
         None
