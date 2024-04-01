@@ -1,11 +1,16 @@
-use crate::utils::{file_read, file_seek, u32_to_u8v, u64_to_u8v, Scanner};
+use crate::error::Result;
+use crate::utils::{u32_to_u8v, u64_to_u8v, Scanner};
 use flate2::{read::DeflateDecoder, write::DeflateEncoder, Compression};
 use std::{
     cmp::Ordering,
     fmt::{Debug, Display},
-    fs::File,
-    io::{Read, Seek, SeekFrom, Write},
+    io::{Read, SeekFrom, Write},
     ptr::NonNull,
+};
+use tokio::io::AsyncWriteExt;
+use tokio::{
+    fs::File,
+    io::{AsyncReadExt, AsyncSeekExt},
 };
 use tracing::{debug, info, instrument};
 
@@ -257,7 +262,7 @@ impl<
     }
 }
 
-fn parse_node<
+async fn parse_node<
     K: PartialOrd + Ord + Serializable + Smoothable + Clone + Display + Debug,
     V: Serializable,
 >(
@@ -266,12 +271,13 @@ fn parse_node<
     size: u32,
     leaves: &mut Vec<NonNull<Node<K, V>>>,
     level: usize,
-) -> (NonNull<Node<K, V>>, usize) {
+) -> Result<(NonNull<Node<K, V>>, usize)> {
     if size == 0 {
-        return (Node::new_ptr(true), 1);
+        return Ok((Node::new_ptr(true), 1));
     }
-    file_seek(file, SeekFrom::Start(offset)).unwrap();
-    let bytes = file_read(file, size as usize).unwrap();
+    file.seek(SeekFrom::Start(offset)).await?;
+    let mut bytes = vec![0; size as usize];
+    file.read_exact(&mut bytes).await?;
     let mut decode = DeflateDecoder::new(&bytes[..]);
     let mut data: Vec<u8> = vec![];
     decode.read_to_end(&mut data).unwrap();
@@ -290,14 +296,14 @@ fn parse_node<
                 break;
             }
             let (mut child_node_ptr, child_node_num) =
-                parse_node(file, child.0, child.1, leaves, level + 1);
+                Box::pin(parse_node(file, child.0, child.1, leaves, level + 1)).await?;
             let child_node = unsafe { child_node_ptr.as_mut() };
             unsafe { node_ptr.as_mut().children.push(child_node_ptr) };
             child_node.parent = Some(node_ptr);
             node_num += child_node_num;
         }
     }
-    (node_ptr, node_num)
+    Ok((node_ptr, node_num))
 }
 
 pub struct Tree<K, V> {
@@ -329,23 +335,23 @@ impl<
         }
     }
 
-    pub fn from_file(
+    pub async fn from_file(
         file: &mut File,
         root_offset: u64,
         root_size: u32,
         index_size_limit: usize,
         leaf_size_limit: usize,
-    ) -> Self {
+    ) -> Result<Self> {
         let mut leaves = Box::<Vec<NonNull<Node<K, V>>>>::new(vec![]);
-        let (root, node_num) = parse_node(file, root_offset, root_size, &mut leaves, 1);
+        let (root, node_num) = parse_node(file, root_offset, root_size, &mut leaves, 1).await?;
         let leaves_ptr = NonNull::from(Box::leak(leaves));
-        Self {
+        Ok(Self {
             root,
             leaves: leaves_ptr,
             node_num,
             index_size_limit,
             leaf_size_limit,
-        }
+        })
     }
 
     #[allow(dead_code)]
@@ -451,9 +457,9 @@ impl<
         }
     }
 
-    pub fn write_to(&self, file: &mut File) -> (u64, u32) {
+    pub async fn write_to(&self, file: &mut File) -> Result<(u64, u32)> {
         if unsafe { self.root.as_ref().records.len() } == 0 {
-            return (0, 0);
+            return Ok((0, 0));
         }
         let mut node_ptr = self.root;
         loop {
@@ -464,7 +470,7 @@ impl<
             let last_index = tmp_node.children.len() - 1;
             node_ptr = tmp_node.children[last_index];
         }
-        let mut offset = file.stream_position().expect("Fail to get stream position");
+        let mut offset = file.stream_position().await?;
         let mut leaf_offset: u64 = 0;
         let mut leaf_size: u32 = 0;
         let mut saved_num = 0;
@@ -500,7 +506,7 @@ impl<
                 leaf_offset = tmp_node.offset;
                 leaf_size = buf.len() as u32;
             }
-            file.write(&buf).expect("Failt to write");
+            file.write(&buf).await?;
             saved_num += 1;
             print!(
                 "\r{} / {} {:.2}%",
@@ -517,9 +523,9 @@ impl<
             }
         }
         print!("\n");
-        file.sync_all().unwrap();
+        file.flush().await?;
         let root_node = unsafe { self.root.as_ref() };
-        (root_node.offset, root_node.zip_size)
+        Ok((root_node.offset, root_node.zip_size))
     }
 
     #[allow(dead_code)]

@@ -1,30 +1,32 @@
+use crate::dictionary::SPEC;
 use crate::error::{Error, Result};
 use crate::tree::{Serializable, Smoothable, Tree};
 use crate::utils::*;
 use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
 use std::fmt::Display;
-use std::fs::File;
-use std::io::{prelude::*, SeekFrom};
+use std::io::SeekFrom;
 use std::path::Path;
+use tokio::fs::File;
+use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
 
 const LEAF_NODE_SIZE: usize = 64 * 1024;
 const INDEX_NODE_SIZE: usize = 64 * 1024;
-pub const EXT_WORD: &str = "bel";
+pub const EXT_ENTRY: &str = "bel";
 pub const EXT_RESOURCE: &str = "beld";
-pub const EXT_RAW_WORD: &str = "bel-db";
+pub const EXT_RAW_ENTRY: &str = "bel-db";
 pub const EXT_RAW_RESOURCE: &str = "beld-db";
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum LapFileType {
-    Word,
+    Entry,
     Resource,
 }
 
 pub fn parse_file_type(file: &str) -> Result<LapFileType> {
     let ext = file.split(".").last();
     match ext {
-        Some(EXT_WORD) => Ok(LapFileType::Word),
+        Some(EXT_ENTRY) => Ok(LapFileType::Entry),
         Some(EXT_RESOURCE) => Ok(LapFileType::Resource),
         _ => Err(Error::Msg("Invalid file extension".to_string())),
     }
@@ -32,9 +34,8 @@ pub fn parse_file_type(file: &str) -> Result<LapFileType> {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Metadata {
-    pub spec: u8,
     pub version: String,
-    pub word_num: u64,
+    pub entry_num: u64,
     pub author: String,
     pub email: String,
     pub create_time: String,
@@ -44,9 +45,8 @@ pub struct Metadata {
 impl Metadata {
     pub fn new() -> Self {
         Self {
-            spec: 1,
             version: String::from(""),
-            word_num: 0,
+            entry_num: 0,
             author: String::from(""),
             email: String::from(""),
             create_time: String::from(""),
@@ -138,43 +138,51 @@ impl Beluga {
         }
     }
 
-    pub async fn from_file(filepath: &str) -> Self {
-        let ext = parse_file_type(filepath).unwrap();
-        let mut file = file_open(filepath).unwrap();
-        let mut buf = file_read(&mut file, 4).unwrap();
-        let metadata_length = u8v_to_u32(&buf[..]) as usize;
-        buf = file_read(&mut file, metadata_length).unwrap();
-        let metadata = serde_json::from_slice(&buf[..]).unwrap();
-        let mut po = Self::new(metadata, ext);
-        // root node
-        file_seek(&mut file, SeekFrom::End(-24)).unwrap();
-        buf = file_read(&mut file, 24).unwrap();
-        let mut scanner = Scanner::new(buf);
-        let entry_root_offset = scanner.read_u64();
-        let entry_root_size = scanner.read_u32();
-        let token_root_offset = scanner.read_u64();
-        let token_root_size = scanner.read_u32();
-        println!("Parsing entry tree...");
-        po.entry_tree = Tree::from_file(
-            &mut file,
-            entry_root_offset,
-            entry_root_size,
-            INDEX_NODE_SIZE,
-            LEAF_NODE_SIZE,
-        );
-        println!("Parsing token tree...");
-        po.token_tree = Tree::from_file(
-            &mut file,
-            token_root_offset,
-            token_root_size,
-            INDEX_NODE_SIZE,
-            LEAF_NODE_SIZE,
-        );
-        po
+    pub async fn from_file(filepath: &str) -> Result<Self> {
+        let ext = parse_file_type(filepath)?;
+        let mut file = File::open(filepath).await?;
+        let spec = file.read_u16().await?;
+        if spec == SPEC {
+            let metadata_length = file.read_u32().await? as usize;
+            let mut buf = vec![0; metadata_length];
+            file.read_exact(&mut buf).await?;
+            let metadata = serde_json::from_slice(&buf[..]).unwrap();
+            let mut po = Self::new(metadata, ext);
+            // root node
+            file.seek(SeekFrom::End(-24)).await?;
+            let mut buf = vec![0; 24];
+            file.read_exact(&mut buf).await?;
+            let mut scanner = Scanner::new(buf);
+            let entry_root_offset = scanner.read_u64();
+            let entry_root_size = scanner.read_u32();
+            let token_root_offset = scanner.read_u64();
+            let token_root_size = scanner.read_u32();
+            println!("Parsing entry tree...");
+            po.entry_tree = Tree::from_file(
+                &mut file,
+                entry_root_offset,
+                entry_root_size,
+                INDEX_NODE_SIZE,
+                LEAF_NODE_SIZE,
+            )
+            .await?;
+            println!("Parsing token tree...");
+            po.token_tree = Tree::from_file(
+                &mut file,
+                token_root_offset,
+                token_root_size,
+                INDEX_NODE_SIZE,
+                LEAF_NODE_SIZE,
+            )
+            .await?;
+            Ok(po)
+        } else {
+            panic!("invalid beluga spec");
+        }
     }
 
-    pub fn input_word(&mut self, name: String, value: Vec<u8>) {
-        self.metadata.word_num += 1;
+    pub fn input_entry(&mut self, name: String, value: Vec<u8>) {
+        self.metadata.entry_num += 1;
         self.entry_tree.insert(EntryKey(name), EntryValue(value));
     }
 
@@ -204,34 +212,36 @@ impl Beluga {
         result
     }
 
-    pub async fn save(&mut self, dest: &str) {
+    pub async fn save(&mut self, dest: &str) -> Result<()> {
         println!("Writing to {}...", dest);
         let file_path = Path::new(dest);
         if file_path.exists() {
             panic!("Destination exists: {}", dest);
         }
         let file_path = Path::new(dest);
-        let mut file = File::create(file_path)
-            .expect(format!("Fail to create file: {}", file_path.display()).as_str());
+        let mut file = File::create(file_path).await?;
+        // spec
+        file.write_u16(SPEC).await?;
         // metadata
         let metadata = serde_json::to_string(&self.metadata).expect("Fail to serialize metdata");
-        let metadata_bytes = metadata.as_bytes();
-        let metadata_length = u32_to_u8v(metadata_bytes.len() as u32);
-        file.write_all(&metadata_length)
-            .expect("Fail to write file");
-        file.write_all(metadata_bytes).expect("Fail to write");
+        let metadata_length = metadata.as_bytes().len() as u32;
+        file.write_u32(metadata_length).await?;
+        file.write(metadata.as_bytes()).await?;
         // entry tree
         println!("Writing entry nodes...");
-        let (entry_root_offset, entry_root_size) = self.entry_tree.write_to(&mut file);
+        let (entry_root_offset, entry_root_size) = self.entry_tree.write_to(&mut file).await?;
         // token tree
         println!("Writing token nodes...");
-        let (token_root_offset, token_root_size) = self.token_tree.write_to(&mut file);
-        file.write_all(&u64_to_u8v(entry_root_offset)).unwrap();
-        file.write_all(&u32_to_u8v(entry_root_size)).unwrap();
-        file.write_all(&u64_to_u8v(token_root_offset)).unwrap();
-        file.write_all(&u32_to_u8v(token_root_size)).unwrap();
-        let file_size = (file.metadata().unwrap().len() as f64) / 1024.0 / 1024.0;
+        let (token_root_offset, token_root_size) = self.token_tree.write_to(&mut file).await?;
+        file.write_u64(entry_root_offset).await?;
+        file.write_u32(entry_root_size).await?;
+        file.write_u64(token_root_offset).await?;
+        file.write_u32(token_root_size).await?;
+        file.flush().await?;
+        let file_metadata = file.metadata().await?;
+        let file_size = (file_metadata.len() as f64) / 1024.0 / 1024.0;
         println!("{} - {:.2}M", dest, file_size);
+        Ok(())
     }
 
     pub fn traverse_entry<F>(&self, walk: &mut F)

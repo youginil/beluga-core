@@ -1,20 +1,25 @@
 use crate::error::{Error, Result};
 use flate2::read::DeflateDecoder;
-use tokio::sync::RwLock;
+use tokio::{
+    fs::{self, File},
+    io::{AsyncReadExt, AsyncSeekExt},
+    sync::RwLock,
+};
 use tracing::{error, info, instrument, warn};
 
 use crate::{
     beluga::{parse_file_type, Beluga, EntryKey, EntryValue, LapFileType, Metadata, EXT_RESOURCE},
     lru::{LruCache, SizedValue},
     tree::{Node, Serializable},
-    utils::{file_open, file_read, file_seek, u8v_to_u32, Scanner},
+    utils::Scanner,
 };
 use std::{
-    fs::{self, File},
     io::{Read, SeekFrom},
     path::Path,
     sync::Arc,
 };
+
+pub const SPEC: u16 = 1;
 
 static REDIRECT: &str = "@@@LINK=";
 
@@ -55,38 +60,44 @@ struct DictFile {
 }
 
 impl DictFile {
-    fn new(filepath: &str, cache_id: u32) -> Result<Self> {
-        let mut file = file_open(filepath)?;
-        let mut buf = file_read(&mut file, 4)?;
-        let metadata_length = u8v_to_u32(&buf[..]);
-        info!("Read metadata: {}B", metadata_length);
-        buf = file_read(&mut file, metadata_length as usize)?;
-        let metadata = match serde_json::from_slice(&buf[..]) {
-            Ok(r) => r,
-            Err(_) => {
-                error!("Fail to parse metadata");
-                return Err(Error::Msg("fail to parse metadata".to_string()));
-            }
-        };
-        file_seek(&mut file, SeekFrom::End(-24))?;
-        buf = file_read(&mut file, 24)?;
-        let mut scanner = Scanner::new(buf);
-        let entry_root_offset = scanner.read_u64();
-        let entry_root_size = scanner.read_u32();
-        let token_root_offset = scanner.read_u64();
-        let token_root_size = scanner.read_u32();
-        info!(
-            entry_root_offset,
-            entry_root_size, token_root_offset, token_root_size
-        );
-        Ok(Self {
-            id: String::from(""),
-            metadata,
-            file,
-            entry_root: (entry_root_offset, entry_root_size),
-            token_root: (token_root_offset, token_root_size),
-            cache_id,
-        })
+    async fn new(filepath: &str, cache_id: u32) -> Result<Self> {
+        let mut file = File::open(filepath).await?;
+        let spec = file.read_u16().await?;
+        if spec == SPEC {
+            let metadata_length = file.read_u32().await?;
+            info!("Read metadata: {}B", metadata_length);
+            let mut buf = vec![0; metadata_length as usize];
+            file.read_exact(&mut buf).await?;
+            let metadata = match serde_json::from_slice(&buf[..]) {
+                Ok(r) => r,
+                Err(_) => {
+                    error!("Fail to parse metadata");
+                    return Err(Error::Msg("fail to parse metadata".to_string()));
+                }
+            };
+            file.seek(SeekFrom::End(-24)).await?;
+            let mut buf = vec![0; 24];
+            file.read_exact(&mut buf).await?;
+            let mut scanner = Scanner::new(buf);
+            let entry_root_offset = scanner.read_u64();
+            let entry_root_size = scanner.read_u32();
+            let token_root_offset = scanner.read_u64();
+            let token_root_size = scanner.read_u32();
+            info!(
+                entry_root_offset,
+                entry_root_size, token_root_offset, token_root_size
+            );
+            Ok(Self {
+                id: String::from(""),
+                metadata,
+                file,
+                entry_root: (entry_root_offset, entry_root_size),
+                token_root: (token_root_offset, token_root_size),
+                cache_id,
+            })
+        } else {
+            Err(Error::Msg("invalid beluga spec".to_string()))
+        }
     }
 
     #[instrument(skip(self, cache))]
@@ -102,13 +113,14 @@ impl DictFile {
             return Some(node);
         }
         drop(cache_lock);
-        if let Err(e) = file_seek(&mut self.file, SeekFrom::Start(offset)) {
+        if let Err(e) = self.file.seek(SeekFrom::Start(offset)).await {
             error!("File Seeking error. {}", e);
             return None;
         }
-        match file_read(&mut self.file, size as usize) {
-            Ok(data) => {
-                let mut decode = DeflateDecoder::new(&data[..]);
+        let mut buf = vec![0; size as usize];
+        match self.file.read_exact(&mut buf).await {
+            Ok(_) => {
+                let mut decode = DeflateDecoder::new(&buf[..]);
                 let mut data: Vec<u8> = vec![];
                 decode.read_to_end(&mut data).unwrap();
                 let (node, children) = Node::<EntryKey, EntryValue>::from_bytes(data);
@@ -276,25 +288,25 @@ impl DictFile {
 pub struct Dictionary {
     dir: String,
     basename: String,
-    word: DictFile,
+    entry: DictFile,
     resources: Vec<DictFile>,
     css_js: Option<(String, String)>,
 }
 
 impl Dictionary {
-    pub fn new(filepath: &str, mut cache_id: u32) -> Result<(Self, u32)> {
+    pub async fn new(filepath: &str, mut cache_id: u32) -> Result<(Self, u32)> {
         let file_type = parse_file_type(filepath)?;
-        if !matches!(file_type, LapFileType::Word) {
-            error!("Invalid WORD extension");
-            return Err(Error::Msg("not a word file".to_string()));
+        if !matches!(file_type, LapFileType::Entry) {
+            error!("invalid entry file extension");
+            return Err(Error::Msg("not a entry file".to_string()));
         }
         let p = Path::new(filepath);
         if !p.exists() || p.is_dir() {
             error!("File not exists or it is a directory");
             return Err(Error::Msg(format!("invalid path. {:?}", p)));
         }
-        info!("Load WORD file");
-        let word = DictFile::new(filepath, cache_id)?;
+        info!("Load entry file");
+        let entry = DictFile::new(filepath, cache_id).await?;
         let basename = p.file_stem().unwrap().to_str().unwrap();
         let mut resources: Vec<DictFile> = Vec::new();
         let dir = match p.parent() {
@@ -329,7 +341,7 @@ impl Dictionary {
                             cache_id += 1;
                             info!("Load resource file. {}", name);
                             let mut res =
-                                DictFile::new(dir.join(&name).to_str().unwrap(), cache_id)?;
+                                DictFile::new(dir.join(&name).to_str().unwrap(), cache_id).await?;
                             res.id = String::from(res_id);
                             resources.push(res);
                         }
@@ -341,7 +353,7 @@ impl Dictionary {
             Self {
                 dir: dir.to_str().unwrap().to_string(),
                 basename: basename.to_string(),
-                word,
+                entry,
                 resources,
                 css_js: None,
             },
@@ -349,7 +361,7 @@ impl Dictionary {
         ))
     }
 
-    pub fn get_css_js(&mut self) -> Result<(String, String)> {
+    pub async fn get_css_js(&mut self) -> Result<(String, String)> {
         if let Some(v) = &self.css_js {
             return Ok(v.clone());
         }
@@ -358,7 +370,7 @@ impl Dictionary {
         let js_file = dir.join(format!("{}.js", self.basename));
         if js_file.is_file() {
             info!("Load JavaScript file. {:?}", js_file);
-            match fs::read_to_string(js_file) {
+            match fs::read_to_string(js_file).await {
                 Ok(text) => js = text,
                 Err(e) => {
                     error!("Fail to read file. {}", e);
@@ -370,7 +382,7 @@ impl Dictionary {
         let css_file = dir.join(format!("{}.css", self.basename));
         if css_file.is_file() {
             info!("Load CSS file. {:?}", css_file);
-            match fs::read_to_string(css_file) {
+            match fs::read_to_string(css_file).await {
                 Ok(text) => css = text,
                 Err(e) => {
                     error!("Fail to read file. {}", e);
@@ -385,7 +397,7 @@ impl Dictionary {
     }
 
     pub fn metadata(&self) -> Metadata {
-        self.word.metadata.clone()
+        self.entry.metadata.clone()
     }
 
     #[instrument(skip(self, cache))]
@@ -396,13 +408,13 @@ impl Dictionary {
         fuzzy_limit: usize,
         result_limit: usize,
     ) -> Vec<String> {
-        info!("Search WORD entries");
-        let mut result = self.word.search(cache.clone(), name, fuzzy_limit).await;
-        if self.word.token_root.1 != 0 {
+        info!("Search entry");
+        let mut result = self.entry.search(cache.clone(), name, fuzzy_limit).await;
+        if self.entry.token_root.1 != 0 {
             info!("Search TOKEN entries");
             if let Some(data) = self
-                .word
-                .search_entry(cache.clone(), self.word.token_root, name)
+                .entry
+                .search_entry(cache.clone(), self.entry.token_root, name)
                 .await
             {
                 let entries = Beluga::parse_token_entries(data);
@@ -423,7 +435,7 @@ impl Dictionary {
     }
 
     #[instrument(skip(self, cache))]
-    pub async fn search_word(
+    pub async fn search_entry(
         &mut self,
         cache: Arc<RwLock<NodeCache>>,
         name: &str,
@@ -432,8 +444,8 @@ impl Dictionary {
         let mut keyword = name.to_string();
         for _ in 0..max_redirects {
             if let Some(data) = self
-                .word
-                .search_entry(cache.clone(), self.word.entry_root, &keyword)
+                .entry
+                .search_entry(cache.clone(), self.entry.entry_root, &keyword)
                 .await
             {
                 if let Ok(content) = String::from_utf8(data) {

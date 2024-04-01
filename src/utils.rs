@@ -1,9 +1,3 @@
-use crate::error::{Error, Result};
-use std::{
-    fs::File,
-    io::{Read, Seek, SeekFrom},
-};
-
 pub fn u8v_to_u64(v: &[u8]) -> u64 {
     if v.len() != 8 {
         panic!("Invalid vector size");
@@ -116,25 +110,5 @@ impl Scanner {
 
     pub fn is_end(&self) -> bool {
         self.pos == self.buf.len()
-    }
-}
-
-pub fn file_read(file: &mut File, n: usize) -> Result<Vec<u8>> {
-    let mut buf: Vec<u8> = vec![0; n];
-    file.read_exact(&mut buf)?;
-    Ok(buf)
-}
-
-pub fn file_seek(file: &mut File, pos: SeekFrom) -> Result<()> {
-    if let Err(_) = file.seek(pos) {
-        return Err(Error::Msg("fail to seek file".to_string()));
-    }
-    Ok(())
-}
-
-pub fn file_open(filepath: &str) -> Result<File> {
-    match File::open(filepath) {
-        Ok(r) => Ok(r),
-        Err(_) => Err(Error::Msg("Fail to open file".to_string())),
     }
 }
