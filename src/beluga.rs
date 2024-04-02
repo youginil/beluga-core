@@ -138,20 +138,23 @@ impl Beluga {
         }
     }
 
-    pub async fn from_file(filepath: &str) -> Result<Self> {
-        let ext = parse_file_type(filepath)?;
-        let mut file = File::open(filepath).await?;
-        let spec = file.read_u16().await?;
+    pub async fn from_file(filepath: &str) -> Self {
+        let ext = parse_file_type(filepath).expect("fail to parse file type");
+        let mut file = File::open(filepath).await.expect("fail to open file");
+        let spec = file.read_u16().await.expect("fail to read spec");
         if spec == SPEC {
-            let metadata_length = file.read_u32().await? as usize;
+            let metadata_length =
+                file.read_u32().await.expect("fail to read metadata length") as usize;
             let mut buf = vec![0; metadata_length];
-            file.read_exact(&mut buf).await?;
-            let metadata = serde_json::from_slice(&buf[..]).unwrap();
+            file.read_exact(&mut buf)
+                .await
+                .expect("fail to read metadata");
+            let metadata = serde_json::from_slice(&buf[..]).expect("invalid metadata");
             let mut po = Self::new(metadata, ext);
             // root node
-            file.seek(SeekFrom::End(-24)).await?;
+            file.seek(SeekFrom::End(-24)).await.expect("seek to -24");
             let mut buf = vec![0; 24];
-            file.read_exact(&mut buf).await?;
+            file.read_exact(&mut buf).await.expect("fail to read roots");
             let mut scanner = Scanner::new(&buf);
             let entry_root_offset = scanner.read_u64();
             let entry_root_size = scanner.read_u32();
@@ -165,7 +168,8 @@ impl Beluga {
                 INDEX_NODE_SIZE,
                 LEAF_NODE_SIZE,
             )
-            .await?;
+            .await
+            .expect("fail to parse entry tree");
             println!("Parsing token tree...");
             po.token_tree = Tree::from_file(
                 &mut file,
@@ -174,8 +178,9 @@ impl Beluga {
                 INDEX_NODE_SIZE,
                 LEAF_NODE_SIZE,
             )
-            .await?;
-            Ok(po)
+            .await
+            .expect("fail to parse token tree");
+            po
         } else {
             panic!("invalid beluga spec");
         }
