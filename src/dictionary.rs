@@ -361,9 +361,13 @@ impl Dictionary {
         ))
     }
 
-    pub async fn get_css_js(&mut self) -> Result<(String, String)> {
+    pub async fn get_css_js(&mut self, disable_cache: bool) -> Result<(String, String)> {
         if let Some(v) = &self.css_js {
-            return Ok(v.clone());
+            if disable_cache {
+                self.css_js = None;
+            } else {
+                return Ok(v.clone());
+            }
         }
         let dir = Path::new(&self.dir);
         let mut js = String::new();
@@ -390,7 +394,7 @@ impl Dictionary {
                 }
             }
         }
-        if !cfg!(debug_assertions) {
+        if !cfg!(debug_assertions) || !disable_cache {
             self.css_js = Some((css.clone(), js.clone()));
         }
         Ok((css, js))
