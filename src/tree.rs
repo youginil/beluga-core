@@ -1,13 +1,13 @@
 use crate::error::Result;
 use crate::utils::{u32_to_u8v, u64_to_u8v, Scanner};
 use flate2::{read::DeflateDecoder, write::DeflateEncoder, Compression};
+use std::io::Seek;
 use std::{
     cmp::Ordering,
     fmt::{Debug, Display},
     io::{Read, SeekFrom, Write},
     ptr::NonNull,
 };
-use tokio::io::AsyncWriteExt;
 use tokio::{
     fs::File,
     io::{AsyncReadExt, AsyncSeekExt},
@@ -457,9 +457,10 @@ impl<
         }
     }
 
-    pub async fn write_to(&self, file: &mut File) -> Result<(u64, u32)> {
+    // DO NOT use tokio::fs::File, it cannot write correctly
+    pub fn write_to(&self, file: &mut std::fs::File) -> (u64, u32) {
         if unsafe { self.root.as_ref().records.len() } == 0 {
-            return Ok((0, 0));
+            return (0, 0);
         }
         let mut node_ptr = self.root;
         loop {
@@ -470,7 +471,7 @@ impl<
             let last_index = tmp_node.children.len() - 1;
             node_ptr = tmp_node.children[last_index];
         }
-        let mut offset = file.stream_position().await?;
+        let mut offset = file.stream_position().expect("fail to get stream position");
         let mut leaf_offset: u64 = 0;
         let mut leaf_size: u32 = 0;
         let mut saved_num = 0;
@@ -506,7 +507,7 @@ impl<
                 leaf_offset = tmp_node.offset;
                 leaf_size = buf.len() as u32;
             }
-            file.write(&buf).await?;
+            file.write_all(&buf).expect("fail to write node");
             saved_num += 1;
             print!(
                 "\r{} / {} {:.2}%",
@@ -523,9 +524,8 @@ impl<
             }
         }
         print!("\n");
-        file.flush().await?;
         let root_node = unsafe { self.root.as_ref() };
-        Ok((root_node.offset, root_node.zip_size))
+        (root_node.offset, root_node.zip_size)
     }
 
     #[allow(dead_code)]

@@ -5,10 +5,10 @@ use crate::utils::*;
 use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
 use std::fmt::Display;
-use std::io::SeekFrom;
+use std::io::{SeekFrom, Write};
 use std::path::Path;
 use tokio::fs::File;
-use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
+use tokio::io::{AsyncReadExt, AsyncSeekExt};
 
 const LEAF_NODE_SIZE: usize = 64 * 1024;
 const INDEX_NODE_SIZE: usize = 64 * 1024;
@@ -217,36 +217,42 @@ impl Beluga {
         result
     }
 
-    pub async fn save(&mut self, dest: &str) -> Result<()> {
+    pub fn save(&mut self, dest: &str) {
         println!("Writing to {}...", dest);
         let file_path = Path::new(dest);
         if file_path.exists() {
             panic!("Destination exists: {}", dest);
         }
         let file_path = Path::new(dest);
-        let mut file = File::create(file_path).await?;
+        let mut file = std::fs::File::create(file_path).expect("fail to create file");
         // spec
-        file.write_u16(SPEC).await?;
+        let spec_buf = u16_to_u8v(SPEC);
+        file.write_all(&spec_buf).expect("fail to write spec");
         // metadata
         let metadata = serde_json::to_string(&self.metadata).expect("Fail to serialize metdata");
         let metadata_length = metadata.as_bytes().len() as u32;
-        file.write_u32(metadata_length).await?;
-        file.write(metadata.as_bytes()).await?;
+        let metadata_length_buf = u32_to_u8v(metadata_length);
+        file.write_all(&metadata_length_buf)
+            .expect("fail to write metadata length");
+        file.write_all(metadata.as_bytes())
+            .expect("fail to wirte metadata");
         // entry tree
         println!("Writing entry nodes...");
-        let (entry_root_offset, entry_root_size) = self.entry_tree.write_to(&mut file).await?;
+        let (entry_root_offset, entry_root_size) = self.entry_tree.write_to(&mut file);
         // token tree
         println!("Writing token nodes...");
-        let (token_root_offset, token_root_size) = self.token_tree.write_to(&mut file).await?;
-        file.write_u64(entry_root_offset).await?;
-        file.write_u32(entry_root_size).await?;
-        file.write_u64(token_root_offset).await?;
-        file.write_u32(token_root_size).await?;
-        file.flush().await?;
-        let file_metadata = file.metadata().await?;
+        let (token_root_offset, token_root_size) = self.token_tree.write_to(&mut file);
+        file.write_all(&u64_to_u8v(entry_root_offset))
+            .expect("fail to write entry root offset");
+        file.write_all(&u32_to_u8v(entry_root_size))
+            .expect("fail to write entry root size");
+        file.write_all(&u64_to_u8v(token_root_offset))
+            .expect("fail to write token root offset");
+        file.write_all(&u32_to_u8v(token_root_size))
+            .expect("fail to write token root size");
+        let file_metadata = file.metadata().expect("fail to get file metadata");
         let file_size = (file_metadata.len() as f64) / 1024.0 / 1024.0;
         println!("{} - {:.2}M", dest, file_size);
-        Ok(())
     }
 
     pub fn traverse_entry<F>(&self, walk: &mut F)
