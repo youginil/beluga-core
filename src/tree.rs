@@ -110,8 +110,8 @@ impl<
         NonNull::from(Box::leak(node))
     }
 
-    pub fn from_bytes(data: Vec<u8>) -> (Box<Self>, Vec<(u64, u32)>) {
-        let mut scanner = Scanner::new(data);
+    pub fn from_bytes(data: &[u8]) -> (Box<Self>, Vec<(u64, u32)>) {
+        let mut scanner = Scanner::new(&data);
         let is_leaf = scanner.read_u8() == 0;
         let rec_num = scanner.read_u32();
         let mut records: Vec<Record<K, V>> = vec![];
@@ -281,7 +281,7 @@ async fn parse_node<
     let mut decode = DeflateDecoder::new(&bytes[..]);
     let mut data: Vec<u8> = vec![];
     decode.read_to_end(&mut data).unwrap();
-    let (mut node, children) = Node::<K, V>::from_bytes(data);
+    let (mut node, children) = Node::<K, V>::from_bytes(&data);
     node.offset = offset;
     node.zip_size = size;
     node.print(level);

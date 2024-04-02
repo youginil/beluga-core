@@ -58,13 +58,13 @@ pub fn u16_to_u8v(v: u16) -> Vec<u8> {
     return r;
 }
 
-pub struct Scanner {
-    buf: Vec<u8>,
+pub struct Scanner<'a> {
+    buf: &'a [u8],
     pos: usize,
 }
 
-impl Scanner {
-    pub fn new(buf: Vec<u8>) -> Self {
+impl<'a> Scanner<'a> {
+    pub fn new(buf: &'a [u8]) -> Self {
         Self { buf, pos: 0 }
     }
 

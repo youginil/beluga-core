@@ -18,16 +18,16 @@ pub const EXT_RAW_ENTRY: &str = "bel-db";
 pub const EXT_RAW_RESOURCE: &str = "beld-db";
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-pub enum LapFileType {
+pub enum BelFileType {
     Entry,
     Resource,
 }
 
-pub fn parse_file_type(file: &str) -> Result<LapFileType> {
+pub fn parse_file_type(file: &str) -> Result<BelFileType> {
     let ext = file.split(".").last();
     match ext {
-        Some(EXT_ENTRY) => Ok(LapFileType::Entry),
-        Some(EXT_RESOURCE) => Ok(LapFileType::Resource),
+        Some(EXT_ENTRY) => Ok(BelFileType::Entry),
+        Some(EXT_RESOURCE) => Ok(BelFileType::Resource),
         _ => Err(Error::Msg("Invalid file extension".to_string())),
     }
 }
@@ -123,13 +123,13 @@ impl Serializable for EntryValue {
 
 pub struct Beluga {
     pub metadata: Metadata,
-    pub file_type: LapFileType,
+    pub file_type: BelFileType,
     entry_tree: Tree<EntryKey, EntryValue>,
     token_tree: Tree<EntryKey, EntryValue>,
 }
 
 impl Beluga {
-    pub fn new(metadata: Metadata, file_type: LapFileType) -> Self {
+    pub fn new(metadata: Metadata, file_type: BelFileType) -> Self {
         Self {
             metadata,
             file_type,
@@ -152,7 +152,7 @@ impl Beluga {
             file.seek(SeekFrom::End(-24)).await?;
             let mut buf = vec![0; 24];
             file.read_exact(&mut buf).await?;
-            let mut scanner = Scanner::new(buf);
+            let mut scanner = Scanner::new(&buf);
             let entry_root_offset = scanner.read_u64();
             let entry_root_size = scanner.read_u32();
             let token_root_offset = scanner.read_u64();
@@ -198,9 +198,9 @@ impl Beluga {
         self.token_tree.insert(key, EntryValue(data));
     }
 
-    pub fn parse_token_entries(data: Vec<u8>) -> Vec<String> {
+    pub fn parse_token_entries(data: &[u8]) -> Vec<String> {
         let mut result: Vec<String> = vec![];
-        let mut scanner = Scanner::new(data);
+        let mut scanner = Scanner::new(&data);
         loop {
             if scanner.is_end() {
                 break;
@@ -249,5 +249,12 @@ impl Beluga {
         F: FnMut(&EntryKey, &EntryValue),
     {
         self.entry_tree.traverse(walk);
+    }
+
+    pub fn traverse_token<F>(&self, walk: &mut F)
+    where
+        F: FnMut(&EntryKey, &EntryValue),
+    {
+        self.token_tree.traverse(walk);
     }
 }

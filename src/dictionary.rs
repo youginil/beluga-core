@@ -8,7 +8,7 @@ use tokio::{
 use tracing::{error, info, instrument, warn};
 
 use crate::{
-    beluga::{parse_file_type, Beluga, EntryKey, EntryValue, LapFileType, Metadata, EXT_RESOURCE},
+    beluga::{parse_file_type, BelFileType, Beluga, EntryKey, EntryValue, Metadata, EXT_RESOURCE},
     lru::{LruCache, SizedValue},
     tree::{Node, Serializable},
     utils::Scanner,
@@ -78,7 +78,7 @@ impl DictFile {
             file.seek(SeekFrom::End(-24)).await?;
             let mut buf = vec![0; 24];
             file.read_exact(&mut buf).await?;
-            let mut scanner = Scanner::new(buf);
+            let mut scanner = Scanner::new(&buf);
             let entry_root_offset = scanner.read_u64();
             let entry_root_size = scanner.read_u32();
             let token_root_offset = scanner.read_u64();
@@ -123,7 +123,7 @@ impl DictFile {
                 let mut decode = DeflateDecoder::new(&buf[..]);
                 let mut data: Vec<u8> = vec![];
                 decode.read_to_end(&mut data).unwrap();
-                let (node, children) = Node::<EntryKey, EntryValue>::from_bytes(data);
+                let (node, children) = Node::<EntryKey, EntryValue>::from_bytes(&data);
                 let mut dnode = DictNode::new(*node);
                 dnode.children = children;
                 let mut cache_lock = cache.write().await;
@@ -296,7 +296,7 @@ pub struct Dictionary {
 impl Dictionary {
     pub async fn new(filepath: &str, mut cache_id: u32) -> Result<(Self, u32)> {
         let file_type = parse_file_type(filepath)?;
-        if !matches!(file_type, LapFileType::Entry) {
+        if !matches!(file_type, BelFileType::Entry) {
             error!("invalid entry file extension");
             return Err(Error::Msg("not a entry file".to_string()));
         }
@@ -421,7 +421,7 @@ impl Dictionary {
                 .search_entry(cache.clone(), self.entry.token_root, name)
                 .await
             {
-                let entries = Beluga::parse_token_entries(data);
+                let entries = Beluga::parse_token_entries(&data);
                 info!("Found {} entry(ies) by TOKEN", entries.len());
                 let mut token_count = 0;
                 for entry_name in entries {
