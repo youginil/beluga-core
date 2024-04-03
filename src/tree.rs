@@ -406,6 +406,7 @@ impl<
                         pnode.children.insert(child_idx + 1, new_node_ptr);
                         div_node_ptr = parent;
                     } else {
+                        self.node_num += 1;
                         let mut pnode_ptr = Node::new_ptr(false);
                         div_node.parent = Some(pnode_ptr);
                         new_node.parent = Some(pnode_ptr);
@@ -441,6 +442,7 @@ impl<
                     pnode.children.insert(child_idx + 1, new_node_ptr);
                     div_node_ptr = parent;
                 } else {
+                    self.node_num += 1;
                     let mut pnode_ptr = Node::new_ptr(false);
                     div_node.parent = Some(pnode_ptr);
                     new_node.parent = Some(pnode_ptr);
