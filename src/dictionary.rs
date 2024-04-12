@@ -143,7 +143,7 @@ impl DictFile {
         &mut self,
         cache: Arc<RwLock<NodeCache>>,
         name: &str,
-        fuzzy_limit: usize,
+        prefix_limit: usize,
     ) -> Vec<String> {
         let mut result: Vec<String> = Vec::new();
         let mut offset = self.entry_root.0;
@@ -172,7 +172,7 @@ impl DictFile {
                     } else {
                         return result;
                     }
-                    if result.len() >= fuzzy_limit {
+                    if result.len() >= prefix_limit {
                         return result;
                     }
                 }
@@ -193,7 +193,7 @@ impl DictFile {
                             } else {
                                 return result;
                             }
-                            if result.len() >= fuzzy_limit {
+                            if result.len() >= prefix_limit {
                                 return result;
                             }
                         }
@@ -409,12 +409,12 @@ impl Dictionary {
         &mut self,
         cache: Arc<RwLock<NodeCache>>,
         name: &str,
-        fuzzy_limit: usize,
-        result_limit: usize,
+        prefix_limit: usize,
+        phrase_limit: usize,
     ) -> Vec<String> {
         info!("Search entry");
-        let mut result = self.entry.search(cache.clone(), name, fuzzy_limit).await;
-        if self.entry.token_root.1 != 0 {
+        let mut result = self.entry.search(cache.clone(), name, prefix_limit).await;
+        if phrase_limit > 0 && self.entry.token_root.1 != 0 {
             info!("Search TOKEN entries");
             if let Some(data) = self
                 .entry
@@ -426,7 +426,7 @@ impl Dictionary {
                 let mut token_count = 0;
                 for entry_name in entries {
                     if !result.contains(&entry_name) {
-                        if token_count >= result_limit {
+                        if token_count >= phrase_limit {
                             break;
                         }
                         result.push(entry_name);
