@@ -143,12 +143,12 @@ impl DictFile {
         &mut self,
         cache: Arc<RwLock<NodeCache>>,
         name: &str,
+        strict: bool,
         prefix_limit: usize,
     ) -> Vec<String> {
         let mut result: Vec<String> = Vec::new();
         let mut offset = self.entry_root.0;
         let mut size = self.entry_root.1;
-        let lower_name = name.to_lowercase();
         loop {
             let dict_node = match self.get_node(cache.clone(), offset, size).await {
                 Some(nd) => nd,
@@ -163,12 +163,15 @@ impl DictFile {
             let (wi, cr) = dn.node.index_of(&key);
             if node.is_leaf {
                 info!("Node is LEAF");
+                let lower_name = name.to_lowercase();
                 let idx = if cr.is_le() { wi } else { wi + 1 };
                 for i in idx..node.records.len() {
                     let k = &node.records[i].key;
                     info!("Checking match: {}", k,);
                     if k.0.to_lowercase().starts_with(lower_name.as_str()) {
-                        result.push(k.0.clone());
+                        if (strict && k.0.starts_with(name)) || !strict {
+                            result.push(k.0.clone());
+                        }
                     } else {
                         return result;
                     }
@@ -189,7 +192,9 @@ impl DictFile {
                             let k = &rec.key.0;
                             info!("Checking match: {}", k);
                             if k.to_lowercase().starts_with(lower_name.as_str()) {
-                                result.push(k.clone());
+                                if (strict && k.starts_with(name)) || !strict {
+                                    result.push(k.clone());
+                                }
                             } else {
                                 return result;
                             }
@@ -409,11 +414,15 @@ impl Dictionary {
         &mut self,
         cache: Arc<RwLock<NodeCache>>,
         name: &str,
+        strict: bool,
         prefix_limit: usize,
         phrase_limit: usize,
     ) -> Vec<String> {
         info!("Search entry");
-        let mut result = self.entry.search(cache.clone(), name, prefix_limit).await;
+        let mut result = self
+            .entry
+            .search(cache.clone(), name, strict, prefix_limit)
+            .await;
         if phrase_limit > 0 && self.entry.token_root.1 != 0 {
             info!("Search TOKEN entries");
             if let Some(data) = self
