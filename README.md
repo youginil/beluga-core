@@ -1,41 +1,54 @@
 # beluga-core
 
-## Beluga
+## Beluga Parsing
 
-#### Dictionary
+| Bytes             | Description                                         |
+| ----------------- | --------------------------------------------------- |
+| 2                 | `spec` the beluga file format version, current is 1 |
+| 4                 | `metadata_length`                                   |
+| `metadata_length` | `Metadata` JSON string                              |
+| -24 + 8           | entry/resource root node offset                     |
+| -16 + 4           | entry/resource root node size                       |
+| -12 + 8           | token root node offset                              |
+| -4 + 4            | token root node size                                |
 
-| Title           | Structure                                                                                                        |
-| --------------- | ---------------------------------------------------------------------------------------------------------------- |
-| Metadata length | (4B)                                                                                                             |
-| Metadata        | {spec: u8, version: String, entry_num: u64, author: String, email: String, create_time: String, comment: String} |
-| Nodes           | (node compressed by Deflate)...                                                                                  |
-| Root Node       | (root offset 8B) (root size 4B)                                                                                  |
+### Metadata
 
-#### Node
+| Name        | Type   | Description        |
+| ----------- | ------ | ------------------ |
+| version     | string | dictionary version |
+| entry_num   | u64    | entry number       |
+| author      | string | author name        |
+| email       | string | email              |
+| create_time | string | create time        |
+| comment     | string | other information  |
 
-| Title       | Structure                                                                                                                                               |
-| ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| is leaf     | (1B) 0 - leaf; other - !leaf                                                                                                                            |
-| Entry count | (4B)                                                                                                                                                    |
-| Entris      | (key length 4B)(key) (leaf ? (value length 4B)(value) : None)...                                                                                        |
-| Children    | !leaf : (child offset 8B)(child length 4B)...<br> leaf: (next sibling offset 8B)(next sibling length 4B)...<br>Offset of the last leaf node' child is 0 |
+### Parsing Node
+
+> Node is compressed by Deflate algorithm
+
+| Bytes | Description                  |
+| ----- | ---------------------------- |
+| 1     | `is_leaf_node`               |
+| 4     | `entry_num` loop for entries |
+
+### Parsing Entry/Resource
+
+| Bytes               | Description                                |
+| ------------------- | ------------------------------------------ |
+| 4                   | `key_length`                               |
+| `key_length`        | `key` is utf8 string                       |
+| 4 `is_leaf == true` | `value_length`                             |
+| `value_length`      | string for entry, binary data for resource |
 
 ## Raw
 
-#### Fields
-
-## Name | Type
-
-id | INTEGER
-name | TEXT
-text | TEXT
-binary | BLOB
-
-#### SQL
-
-```
-select * from word group by name having count(*) > 1;
-```
+| Name   | Type    |
+| ------ | ------- |
+| id     | INTEGER |
+| name   | TEXT    |
+| text   | TEXT    |
+| binary | BLOB    |
 
 ## References
 
