@@ -5,10 +5,10 @@ use tokio::{
     io::{AsyncReadExt, AsyncSeekExt},
     sync::RwLock,
 };
-use tracing::{error, info, instrument, warn};
+use tracing::{error, info, warn};
 
 use crate::{
-    beluga::{parse_file_type, BelFileType, Beluga, EntryKey, EntryValue, Metadata, EXT_RESOURCE},
+    beluga::{BelFileType, Beluga, EXT_RESOURCE, EntryKey, EntryValue, Metadata, parse_file_type},
     lru::{LruCache, SizedValue},
     tree::{Node, Serializable},
     utils::Scanner,
@@ -50,7 +50,7 @@ impl SizedValue for DictNode {
 }
 
 #[derive(Debug)]
-struct DictFile {
+pub struct DictFile {
     id: String,
     metadata: Metadata,
     file: File,
@@ -60,7 +60,7 @@ struct DictFile {
 }
 
 impl DictFile {
-    async fn new(filepath: &str, cache_id: u32) -> Result<Self> {
+    pub async fn new<T: AsRef<Path>>(filepath: T, cache_id: u32) -> Result<Self> {
         let mut file = File::open(filepath).await?;
         let spec = file.read_u16().await?;
         if spec == SPEC {
@@ -100,19 +100,20 @@ impl DictFile {
         }
     }
 
-    #[instrument(skip(self, cache))]
-    async fn get_node(
+    pub async fn get_node(
         &mut self,
-        cache: Arc<RwLock<NodeCache>>,
+        cache: Option<Arc<RwLock<NodeCache>>>,
         offset: u64,
         size: u32,
     ) -> Option<DictNode> {
-        let cache_lock = cache.read().await;
-        if let Some(node) = cache_lock.get(&(self.cache_id, offset)) {
-            info!("Found in cache");
-            return Some(node);
+        if let Some(cache) = cache.as_ref() {
+            let cache_lock = cache.read().await;
+            if let Some(node) = cache_lock.get(&(self.cache_id, offset)) {
+                info!("Found in cache");
+                return Some(node);
+            }
+            drop(cache_lock);
         }
-        drop(cache_lock);
         if let Err(e) = self.file.seek(SeekFrom::Start(offset)).await {
             error!("File Seeking error. {}", e);
             return None;
@@ -126,10 +127,14 @@ impl DictFile {
                 let (node, children) = Node::<EntryKey, EntryValue>::from_bytes(&data);
                 let mut dnode = DictNode::new(*node);
                 dnode.children = children;
-                let mut cache_lock = cache.write().await;
-                let value = cache_lock.put((self.cache_id, offset), dnode);
-                drop(cache_lock);
-                Some(value)
+                if let Some(cache) = cache.as_ref() {
+                    let mut cache_lock = cache.write().await;
+                    let value = cache_lock.put((self.cache_id, offset), dnode);
+                    drop(cache_lock);
+                    Some(value)
+                } else {
+                    Some(dnode)
+                }
             }
             Err(e) => {
                 error!("File Reading Error. {}", e);
@@ -138,10 +143,9 @@ impl DictFile {
         }
     }
 
-    #[instrument(skip(self, cache))]
     pub async fn search(
         &mut self,
-        cache: Arc<RwLock<NodeCache>>,
+        cache: Option<Arc<RwLock<NodeCache>>>,
         name: &str,
         strict: bool,
         prefix_limit: usize,
@@ -150,7 +154,12 @@ impl DictFile {
         let mut offset = self.entry_root.0;
         let mut size = self.entry_root.1;
         loop {
-            let dict_node = match self.get_node(cache.clone(), offset, size).await {
+            let ca = if let Some(v) = cache.as_ref() {
+                Some(v.clone())
+            } else {
+                None
+            };
+            let dict_node = match self.get_node(ca, offset, size).await {
                 Some(nd) => nd,
                 None => {
                     error!("Node not exists: offset: {}, size: {}", offset, size);
@@ -187,7 +196,12 @@ impl DictFile {
                         info!("No next sibling");
                         return result;
                     }
-                    if let Some(dn) = self.get_node(cache.clone(), next_offset, next_size).await {
+                    let ca = if let Some(v) = cache.as_ref() {
+                        Some(v.clone())
+                    } else {
+                        None
+                    };
+                    if let Some(dn) = self.get_node(ca, next_offset, next_size).await {
                         for rec in &dn.node.records {
                             let k = &rec.key.0;
                             info!("Checking match: {}", k);
@@ -219,17 +233,21 @@ impl DictFile {
         }
     }
 
-    #[instrument(skip(self, cache))]
     pub async fn search_entry(
         &mut self,
-        cache: Arc<RwLock<NodeCache>>,
+        cache: Option<Arc<RwLock<NodeCache>>>,
         root: (u64, u32),
         name: &str,
     ) -> Option<Vec<u8>> {
         let mut offset = root.0;
         let mut size = root.1;
         loop {
-            let dict_node = match self.get_node(cache.clone(), offset, size).await {
+            let ca = if let Some(v) = cache.as_ref() {
+                Some(v.clone())
+            } else {
+                None
+            };
+            let dict_node = match self.get_node(ca, offset, size).await {
                 Some(nd) => nd,
                 None => {
                     error!("Node not exists. offset: {}, size: {}", offset, size);
@@ -299,22 +317,22 @@ pub struct Dictionary {
 }
 
 impl Dictionary {
-    pub async fn new(filepath: &str, mut cache_id: u32) -> Result<(Self, u32)> {
-        let file_type = parse_file_type(filepath)?;
+    pub async fn new<T: AsRef<Path>>(filepath: T, mut cache_id: u32) -> Result<(Self, u32)> {
+        let filepath = filepath.as_ref().to_owned();
+        let file_type = parse_file_type(filepath.as_path())?;
         if !matches!(file_type, BelFileType::Entry) {
             error!("invalid entry file extension");
             return Err(Error::Msg("not a entry file".to_string()));
         }
-        let p = Path::new(filepath);
-        if !p.exists() || p.is_dir() {
+        if !filepath.exists() || filepath.is_dir() {
             error!("File not exists or it is a directory");
-            return Err(Error::Msg(format!("invalid path. {:?}", p)));
+            return Err(Error::Msg(format!("invalid path. {:?}", filepath)));
         }
         info!("Load entry file");
-        let entry = DictFile::new(filepath, cache_id).await?;
-        let basename = p.file_stem().unwrap().to_str().unwrap();
+        let entry = DictFile::new(filepath.as_path(), cache_id).await?;
+        let basename = filepath.file_stem().unwrap().to_str().unwrap();
         let mut resources: Vec<DictFile> = Vec::new();
-        let dir = match p.parent() {
+        let dir = match filepath.parent() {
             Some(d) => d,
             None => {
                 error!("File has no parent directory, weird???");
@@ -409,20 +427,21 @@ impl Dictionary {
         self.entry.metadata.clone()
     }
 
-    #[instrument(skip(self, cache))]
     pub async fn search(
         &mut self,
-        cache: Arc<RwLock<NodeCache>>,
+        cache: Option<Arc<RwLock<NodeCache>>>,
         name: &str,
         strict: bool,
         prefix_limit: usize,
         phrase_limit: usize,
     ) -> Vec<String> {
         info!("Search entry");
-        let mut result = self
-            .entry
-            .search(cache.clone(), name, strict, prefix_limit)
-            .await;
+        let ca = if let Some(v) = cache.as_ref() {
+            Some(v.clone())
+        } else {
+            None
+        };
+        let mut result = self.entry.search(ca, name, strict, prefix_limit).await;
         if phrase_limit > 0 && self.entry.token_root.1 != 0 {
             info!("Search TOKEN entries");
             if let Some(data) = self
@@ -447,10 +466,9 @@ impl Dictionary {
         result
     }
 
-    #[instrument(skip(self, cache))]
     pub async fn search_entry(
         &mut self,
-        cache: Arc<RwLock<NodeCache>>,
+        cache: Option<Arc<RwLock<NodeCache>>>,
         name: &str,
     ) -> Option<String> {
         let max_redirects = 3;
@@ -475,10 +493,9 @@ impl Dictionary {
         None
     }
 
-    #[instrument(skip(self, cache))]
     pub async fn search_resource(
         &mut self,
-        cache: Arc<RwLock<NodeCache>>,
+        cache: Option<Arc<RwLock<NodeCache>>>,
         name: &str,
     ) -> Option<Vec<u8>> {
         info!("Resource name: {}", name);

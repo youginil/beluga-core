@@ -23,9 +23,9 @@ pub enum BelFileType {
     Resource,
 }
 
-pub fn parse_file_type(file: &str) -> Result<BelFileType> {
-    let ext = file.split(".").last();
-    match ext {
+pub fn parse_file_type<T: AsRef<Path>>(file: T) -> Result<BelFileType> {
+    let file = file.as_ref().to_owned();
+    match file.extension().and_then(|x| x.to_str()) {
         Some(EXT_ENTRY) => Ok(BelFileType::Entry),
         Some(EXT_RESOURCE) => Ok(BelFileType::Resource),
         _ => Err(Error::Msg("Invalid file extension".to_string())),
@@ -138,8 +138,8 @@ impl Beluga {
         }
     }
 
-    pub async fn from_file(filepath: &str) -> Self {
-        let ext = parse_file_type(filepath).expect("fail to parse file type");
+    pub async fn from_file<T: AsRef<Path>>(filepath: T) -> Self {
+        let ext = parse_file_type(filepath.as_ref()).expect("fail to parse file type");
         let mut file = File::open(filepath).await.expect("fail to open file");
         let spec = file.read_u16().await.expect("fail to read spec");
         if spec == SPEC {
