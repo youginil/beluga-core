@@ -10,8 +10,8 @@ use std::path::Path;
 use tokio::fs::File;
 use tokio::io::{AsyncReadExt, AsyncSeekExt};
 
-const LEAF_NODE_SIZE: usize = 64 * 1024;
-const INDEX_NODE_SIZE: usize = 64 * 1024;
+pub const LEAF_NODE_SIZE: usize = 64 * 1024;
+pub const INDEX_NODE_SIZE: usize = 64 * 1024;
 pub const EXT_ENTRY: &str = "bel";
 pub const EXT_RESOURCE: &str = "beld";
 pub const EXT_RAW_ENTRY: &str = "bel-db";
@@ -55,7 +55,7 @@ impl Metadata {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct EntryKey(pub String);
 
 impl Display for EntryKey {
@@ -104,7 +104,7 @@ impl Smoothable for EntryKey {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct EntryValue(pub Vec<u8>);
 
 impl Serializable for EntryValue {

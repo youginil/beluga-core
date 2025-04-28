@@ -1,6 +1,8 @@
 use beluga_core::{
+    beluga::{EntryKey, EntryValue},
     dictionary::{DictFile, DictNode},
     lru::LruCache,
+    tree::{Node, Record},
 };
 use criterion::{Criterion, criterion_group, criterion_main};
 use std::{
@@ -21,7 +23,7 @@ async fn search(dict: &mut DictFile, cache: Option<Arc<RwLock<LruCache<(u32, u64
     dict.search(cache, "name", true, 10).await;
 }
 
-fn dict_benchmark(c: &mut Criterion) {
+fn dict_bench(c: &mut Criterion) {
     let cache_id = 1;
 
     let mut group = c.benchmark_group("dictionary");
@@ -47,5 +49,40 @@ fn dict_benchmark(c: &mut Criterion) {
     });
 }
 
-criterion_group!(benches, dict_benchmark);
+fn lru_bench(c: &mut Criterion) {
+    let mut group = c.benchmark_group("LRU");
+
+    let mut lru = LruCache::new(100 * 1024 * 1024);
+    let mut node = Node::<EntryKey, EntryValue>::default();
+    node.records = vec![
+        Record {
+            key: EntryKey("hello".to_string()),
+            value: Some(EntryValue(vec![0; 1024]))
+        };
+        64
+    ];
+    let dnode = DictNode::new(node);
+    let mut offset = 1;
+    let cache_id = 1;
+
+    group.bench_function("put", |b| {
+        b.iter(|| {
+            for _ in 0..100 {
+                let oft = offset;
+                offset = offset + 1;
+                lru.put((cache_id, oft), dnode.clone());
+            }
+        });
+    });
+
+    group.bench_function("get", |b| {
+        b.iter(|| {
+            for _ in 0..1000 {
+                lru.get(&(1000, 1000));
+            }
+        });
+    });
+}
+
+criterion_group!(benches, dict_bench, lru_bench);
 criterion_main!(benches);

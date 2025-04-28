@@ -1,6 +1,6 @@
 use crate::error::Result;
-use crate::utils::{u32_to_u8v, u64_to_u8v, Scanner};
-use flate2::{read::DeflateDecoder, write::DeflateEncoder, Compression};
+use crate::utils::{Scanner, u32_to_u8v, u64_to_u8v};
+use flate2::{Compression, read::DeflateDecoder, write::DeflateEncoder};
 use std::io::Seek;
 use std::{
     cmp::Ordering,
@@ -76,7 +76,7 @@ impl<K: Serializable, V: Serializable> Record<K, V> {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct Node<K, V> {
     pub is_leaf: bool,
     pub records: Vec<Record<K, V>>,
@@ -89,10 +89,8 @@ pub struct Node<K, V> {
 unsafe impl<K, V> Send for Node<K, V> {}
 unsafe impl<K, V> Sync for Node<K, V> {}
 
-impl<
-        K: PartialOrd + Ord + Serializable + Smoothable + Display + Debug + Clone,
-        V: Serializable,
-    > Node<K, V>
+impl<K: PartialOrd + Ord + Serializable + Smoothable + Display + Debug + Clone, V: Serializable>
+    Node<K, V>
 {
     pub fn new(is_leaf: bool) -> Self {
         Self {
@@ -317,10 +315,8 @@ pub struct Tree<K, V> {
 unsafe impl<K, V> Send for Tree<K, V> {}
 unsafe impl<K, V> Sync for Tree<K, V> {}
 
-impl<
-        K: PartialOrd + Ord + Serializable + Smoothable + Clone + Display + Debug,
-        V: Serializable,
-    > Tree<K, V>
+impl<K: PartialOrd + Ord + Serializable + Smoothable + Clone + Display + Debug, V: Serializable>
+    Tree<K, V>
 {
     pub fn new(index_size_limit: usize, leaf_size_limit: usize) -> Self {
         let root = Node::new_ptr(true);

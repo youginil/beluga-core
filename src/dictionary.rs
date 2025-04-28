@@ -34,11 +34,12 @@ pub struct DictNode {
 }
 
 impl DictNode {
-    fn new(node: EntryNode) -> Self {
+    pub fn new(node: EntryNode) -> Self {
+        let size = size_of_val(&node) as u64;
         Self {
             node,
             children: Vec::new(),
-            size: 0,
+            size,
         }
     }
 }
@@ -98,6 +99,10 @@ impl DictFile {
         } else {
             Err(Error::Msg("invalid beluga spec".to_string()))
         }
+    }
+
+    pub fn get_entry_root(&self) -> (u64, u32) {
+        self.entry_root
     }
 
     pub async fn get_node(
